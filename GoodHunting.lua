@@ -425,7 +425,7 @@ function Ability:charges()
 	return (GetSpellCharges(self.spellId)) or 0
 end
 
-function Ability:charges_fractional()
+function Ability:chargesFractional()
 	local charges, max_charges, recharge_start, recharge_time = GetSpellCharges(self.spellId)
 	if charges >= max_charges then
 		return charges
@@ -433,7 +433,15 @@ function Ability:charges_fractional()
 	return charges + ((var.time - recharge_start) / recharge_time)
 end
 
-function Ability:max_charges()
+function Ability:fullRechargeTime()
+	local charges, max_charges, recharge_start, recharge_time = GetSpellCharges(self.spellId)
+	if charges >= max_charges then
+		return 0
+	end
+	return (max_charges - charges - 1) * recharge_time + (recharge_time - (var.time - recharge_start))
+end
+
+function Ability:maxCharges()
 	local _, max_charges = GetSpellCharges(self.spellId)
 	return max_charges or 0
 end
@@ -444,6 +452,18 @@ end
 
 function Ability:channeling()
 	return UnitChannelInfo('player') == self.name
+end
+
+function Ability:castTime()
+	local _, _, _, castTime = GetSpellInfo(self.spellId)
+	if castTime == 0 then
+		return self.triggers_gcd and var.gcd or 0
+	end
+	return castTime / 1000
+end
+
+function Ability:castRegen()
+	return var.focus_regen * self:castTime()
 end
 
 function Ability:tickTime()
@@ -933,12 +953,99 @@ APL[SPEC.SURVIVAL].main = function(self)
 		if Opt.pot and PotionOfProlongedPower:usable() then
 			UseCooldown(PotionOfProlongedPower)
 		end
+		if Harpoon:usable() then
+			UseCooldown(Harpoon)
+		end
 	end
 	if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
 		UseCooldown(RepurposedFelFocuser)
 	end
 	if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
 		UseCooldown(LightforgedAugmentRune)
+	end
+--[[
+actions=auto_attack
+actions+=/muzzle,if=equipped.sephuzs_secret&target.debuff.casting.react&cooldown.buff_sephuzs_secret.up&!buff.sephuzs_secret.up
+actions+=/use_items
+actions+=/berserking,if=cooldown.coordinated_assault.remains>30
+actions+=/blood_fury,if=cooldown.coordinated_assault.remains>30
+actions+=/ancestral_call,if=cooldown.coordinated_assault.remains>30
+actions+=/fireblood,if=cooldown.coordinated_assault.remains>30
+actions+=/lights_judgment
+actions+=/potion,if=buff.coordinated_assault.up&(buff.berserking.up|buff.blood_fury.up|!race.troll&!race.orc)
+actions+=/variable,name=can_gcd,value=!talent.mongoose_bite.enabled|buff.mongoose_fury.down|(buff.mongoose_fury.remains-(((buff.mongoose_fury.remains*focus.regen+focus)%action.mongoose_bite.cost)*gcd.max)>gcd.max)
+actions+=/steel_trap
+actions+=/a_murder_of_crows
+actions+=/coordinated_assault
+actions+=/chakrams,if=active_enemies>1
+actions+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&buff.tip_of_the_spear.stack<3&active_enemies<2
+actions+=/wildfire_bomb,if=(focus+cast_regen<focus.max|active_enemies>1)&(dot.wildfire_bomb.refreshable&buff.mongoose_fury.down|full_recharge_time<gcd)
+actions+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&buff.tip_of_the_spear.stack<3
+actions+=/butchery,if=(!talent.wildfire_infusion.enabled|full_recharge_time<gcd)&active_enemies>3|(dot.shrapnel_bomb.ticking&dot.internal_bleeding.stack<3)
+actions+=/serpent_sting,if=(active_enemies<2&refreshable&(buff.mongoose_fury.down|(variable.can_gcd&!talent.vipers_venom.enabled)))|buff.vipers_venom.up
+actions+=/carve,if=active_enemies>2&(active_enemies<6&active_enemies+gcd<cooldown.wildfire_bomb.remains|5+gcd<cooldown.wildfire_bomb.remains)
+actions+=/harpoon,if=talent.terms_of_engagement.enabled
+actions+=/flanking_strike
+actions+=/chakrams
+actions+=/serpent_sting,target_if=min:remains,if=refreshable&buff.mongoose_fury.down|buff.vipers_venom.up
+actions+=/mongoose_bite,target_if=min:dot.internal_bleeding.stack,if=buff.mongoose_fury.up|focus>60
+actions+=/butchery
+actions+=/raptor_strike,target_if=min:dot.internal_bleeding.stack
+]]
+	if Opt.pot and PotionOfProlongedPower:usable() and CoordinatedAssault:up() and BloodlustActive() then
+		UseCooldown(PotionOfProlongedPower)
+	end
+	var.can_gcd = not MongooseBite.known or MongooseFury:down() or ((MongooseFury:remains() - (((MongooseFury:remains() * FocusRegen() + Focus()) % MongooseBite:cost()) * GCD())) > GCD())
+	if SteelTrap:usable() then
+		UseCooldown(SteelTrap)
+	end
+	if AMurderOfCrows:usable() then
+		UseCooldown(AMurderOfCrows)
+	end
+	if CoordinatedAssault:usable() then
+		UseCooldown(CoordinatedAssault)
+	end
+	if Chakrams:usable() and Enemies() > 1 then
+		return Chakrams
+	end
+	if KillCommand:usable() and (Focus() + KillCommand:castRegen()) < FocusMax() and TipOfTheSpear:stack() < 3 and Enemies() < 2 then
+		return KillCommand
+	end
+	if WildfireBomb:usable() and ((Focus() + WildfireBomb:castRegen()) < FocusMax() or Enemies() > 1) and (WildfireBomb:refreshable() and MongooseFury:down() or WildfireBomb:fullRechargeTime() < GCD()) then
+		return WildfireBomb
+	end
+	if KillCommand:usable() and (Focus() + KillCommand:castRegen()) < FocusMax() and TipOfTheSpear:stack() < 3 then
+		return KillCommand
+	end
+	if Butchery:usable() and ((not WildfireInfusion.known or Butchery:fullRechargeTime() < GCD()) and Enemies() > 3 or (WildfireInfusion.known and ShrapnelBomb:up() and InternalBleeding:stack() < 3)) then
+		return Butchery
+	end
+	if SerpentSting:usable() and ((Enemies() < 2 and SerpentSting:refreshable() and (MongooseFury:down() or (var.can_gcd and not VipersVenom.known))) or (VipersVenom.known and VipersVenom:up())) then
+		return SerpentSting
+	end
+	if Carve:usable() and Enemies() > 2 and (Enemies() < 6 and (Enemies() + GCD()) < WildfireBomb:cooldown() or (5 + GCD()) < WildfireBomb:cooldown()) then
+		return Carve
+	end
+	if TermsOfEngagement.known and Harpoon:usable() then
+		UseCooldown(Harpoon)
+	end
+	if FlankingStrike:usable() then
+		return FlankingStrike
+	end
+	if Chakrams:usable() then
+		return Chakrams
+	end
+	if SerpentSting:usable() and ((SerpentSting:refreshable() and MongooseFury:down()) or (VipersVenom.known and VipersVenom:up())) then
+		return SerpentSting
+	end
+	if MongooseBite:usable() and (MongooseFury:up() or Focus() > 60) then
+		return MongooseBite
+	end
+	if Butchery:usable() then
+		return Butchery
+	end
+	if RaptorStrike:usable() then
+		return RaptorStrike
 	end
 end
 
