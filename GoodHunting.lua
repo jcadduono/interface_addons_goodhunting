@@ -843,6 +843,13 @@ end
 
 -- Start Ability Modifications
 
+function SerpentSting:cost()
+	if VipersVenom:up() then
+		return 0
+	end
+	return Ability.cost(self)
+end
+
 function SephuzsSecret:cooldown()
 	if not self.cooldown_start then
 		return 0
