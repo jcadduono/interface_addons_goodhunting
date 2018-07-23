@@ -298,6 +298,7 @@ function Ability.add(spellId, buff, player, spellId2)
 		name = false,
 		icon = false,
 		requires_charge = false,
+		requires_pet = false,
 		triggers_gcd = true,
 		hasted_duration = false,
 		hasted_cooldown = false,
@@ -325,6 +326,9 @@ function Ability:usable(seconds)
 		return false
 	end
 	if self:cost() > var.focus then
+		return false
+	end
+	if self.requires_pet and not var.pet_exists then
 		return false
 	end
 	if self.requires_charge and self:charges() == 0 then
@@ -572,14 +576,103 @@ SephuzsSecret.cooldown_duration = 30
 ------ Procs
 
 ---- Survival
-local Muzzle = Ability.add(187707, false, true)
-Muzzle.cooldown_duration = 15
-Muzzle.triggers_gcd = false
+local Carve = Ability.add(187708, false, true)
+Carve.focus_cost = 35
+local CoordinatedAssault = Ability.add(266779, true, true)
+CoordinatedAssault.cooldown_duration = 120
+CoordinatedAssault.buff_duration = 20
+CoordinatedAssault.requires_pet = true
+local Harpoon = Ability.add(190925, false, true, 190927)
+Harpoon.cooldown_duration = 20
+Harpoon.buff_duration = 3
 local Intimidation = Ability.add(19577, false, true)
 Intimidation.cooldown_duration = 60
 Intimidation.buff_duration = 5
+Intimidation.requires_pet = true
+local KillCommand = Ability.add(259489, false, true)
+KillCommand.focus_cost = -15
+KillCommand.cooldown_duration = 6
+KillCommand.hasted_cooldown = true
+KillCommand.requires_charge = true
+KillCommand.requires_pet = true
+local Muzzle = Ability.add(187707, false, true)
+Muzzle.cooldown_duration = 15
+Muzzle.triggers_gcd = false
+local RaptorStrike = Ability.add(186270, false, true)
+RaptorStrike.focus_cost = 30
+local SerpentSting = Ability.add(259491, false, true)
+SerpentSting.focus_cost = 20
+SerpentSting.buff_duration = 12
+SerpentSting.tick_interval = 3
+SerpentSting.hasted_ticks = true
+SerpentSting.hasted_duration = true
+local WildfireBomb = Ability.add(259495, false, true, 269747)
+WildfireBomb.cooldown_duration = 18
+WildfireBomb.buff_duration = 6
+WildfireBomb.tick_interval = 1
+WildfireBomb.hasted_cooldown = true
+WildfireBomb.requires_charge = true
 ------ Talents
-
+local AlphaPredator = Ability.add(269737, false, true)
+local AMurderOfCrows = Ability.add(131894, false, true, 131900)
+AMurderOfCrows.focus_cost = 30
+AMurderOfCrows.cooldown_duration = 60
+AMurderOfCrows.tick_interval = 1
+AMurderOfCrows.hasted_ticks = true
+local BirdsOfPrey = Ability.add(260331, false, true)
+local Bloodseeker = Ability.add(260248, false, true, 259277)
+Bloodseeker.buff_duration = 8
+Bloodseeker.tick_interval = 2
+local Butchery = Ability.add(212436, false, true)
+Butchery.focus_cost = 30
+Butchery.cooldown_duration = 9
+Butchery.hasted_cooldown = true
+Butchery.requires_charge = true
+local Chakrams = Ability.add(259391, false, true)
+Chakrams.focus_cost = 30
+Chakrams.cooldown_duration = 20
+local FlankingStrike = Ability.add(269751, false, true)
+FlankingStrike.focus_cost = -30
+FlankingStrike.cooldown_duration = 40
+FlankingStrike.requires_pet = true
+local GuerrillaTactics = Ability.add(264332, false, true)
+local HydrasBite = Ability.add(260241, false, true)
+local InternalBleeding = Ability.add(270343, false, true) -- Shrapnel Bomb DoT applied by Raptor Strike/Mongoose Bite/Carve
+local MongooseBite = Ability.add(259387, false, true)
+MongooseBite.focus_cost = 30
+local MongooseFury = Ability.add(259388, true, true)
+MongooseFury.buff_duration = 14
+local PheromoneBomb = Ability.add(270323, false, true, 270332) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
+PheromoneBomb.cooldown_duration = 18
+PheromoneBomb.buff_duration = 6
+PheromoneBomb.tick_interval = 1
+PheromoneBomb.hasted_cooldown = true
+PheromoneBomb.requires_charge = true
+local Predator = Ability.add(260249, true, true) -- Bloodseeker buff
+local ShrapnelBomb = Ability.add(270335, false, true, 270339) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
+ShrapnelBomb.cooldown_duration = 18
+ShrapnelBomb.buff_duration = 6
+ShrapnelBomb.tick_interval = 1
+ShrapnelBomb.hasted_cooldown = true
+ShrapnelBomb.requires_charge = true
+local SteelTrap = Ability.add(162488, false, true, 162487)
+SteelTrap.cooldown_duration = 30
+SteelTrap.buff_duration = 20
+SteelTrap.tick_interval = 2
+SteelTrap.hasted_ticks = true
+local TermsOfEngagement = Ability.add(265895, true, true, 265898)
+TermsOfEngagement.buff_duration = 10
+local TipOfTheSpear = Ability.add(260285, true, true, 260286)
+TipOfTheSpear.buff_duration = 10
+local VipersVenom = Ability.add(268501, true, true, 268552)
+VipersVenom.buff_duration = 8
+local VolatileBomb = Ability.add(271045, false, true, 271049) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
+VolatileBomb.cooldown_duration = 18
+VolatileBomb.buff_duration = 6
+VolatileBomb.tick_interval = 1
+VolatileBomb.hasted_cooldown = true
+VolatileBomb.requires_charge = true
+local WildfireInfusion = Ability.add(271014, false, true)
 ------ Procs
 
 -- Tier Bonuses & Legendaries
@@ -755,6 +848,8 @@ local function UpdateVars()
 	var.focus_regen = GetPowerRegen()
 	var.focus_max = UnitPowerMax('player', 2)
 	var.focus = min(var.focus_max, floor(UnitPower('player', 2) + (var.focus_regen * var.execute_remains)))
+	var.pet = UnitGUID('pet')
+	var.pet_exists = UnitExists('pet') and not UnitIsDead('pet')
 	hp = UnitHealth('target')
 	table.remove(Target.healthArray, 1)
 	Target.healthArray[#Target.healthArray + 1] = hp
@@ -1276,9 +1371,22 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			autoAoe:remove(dstGUID)
 		end
 	end
-	if srcGUID ~= var.player then
+	if srcGUID ~= var.player and srcGUID ~= var.pet then
 		return
 	end
+--[[ DEBUG ]]
+	if eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' or eventType == 'SPELL_PERIODIC_DAMAGE' or eventType == 'SPELL_DAMAGE' then
+		print(format('EVENT %s TRACK CHECK FOR %s ID %d', eventType, spellName, spellId))
+		local _, ability
+		for _, ability in next, abilities do
+			if spellId == ability.spellId or spellId == ability.spellId2 then
+				print(format('%s: %s - time: %.2f - time since last: %.2f', eventType, spellName, timeStamp, timeStamp - (ability.last_trigger or timeStamp)))
+				ability.last_trigger = timeStamp
+				break
+			end
+		end
+	end
+--[[ DEBUG ]]
 	if eventType == 'SPELL_CAST_SUCCESS' then
 		local castedAbility = abilityBySpellId[spellId]
 		if castedAbility then
