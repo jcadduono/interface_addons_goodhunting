@@ -430,7 +430,7 @@ function Ability:chargesFractional()
 	if charges >= max_charges then
 		return charges
 	end
-	return charges + ((var.time - recharge_start) / recharge_time)
+	return charges + ((max(0, var.time - recharge_start + var.execute_remains)) / recharge_time)
 end
 
 function Ability:fullRechargeTime()
@@ -438,7 +438,7 @@ function Ability:fullRechargeTime()
 	if charges >= max_charges then
 		return 0
 	end
-	return (max_charges - charges - 1) * recharge_time + (recharge_time - (var.time - recharge_start))
+	return (max_charges - charges - 1) * recharge_time + (recharge_time - (var.time - recharge_start) - var.execute_remains)
 end
 
 function Ability:maxCharges()
