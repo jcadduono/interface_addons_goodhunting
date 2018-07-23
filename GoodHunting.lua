@@ -1304,16 +1304,16 @@ local resourceAnchor = {}
 local ResourceFramePoints = {
 	['blizzard'] = {
 		[SPEC.BEASTMASTERY] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 18 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -4 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -6 }
 		},
 		[SPEC.MARKSMANSHIP] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 18 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -4 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -6 }
 		},
 		[SPEC.SURVIVAL] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 18 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -4 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -6 }
 		}
 	},
 	['kui'] = {
