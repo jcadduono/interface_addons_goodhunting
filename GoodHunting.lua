@@ -1487,7 +1487,7 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 	if srcGUID ~= var.player and srcGUID ~= var.pet then
 		return
 	end
---[[ DEBUG ]]
+--[[ DEBUG ]
 	if eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' or eventType == 'SPELL_PERIODIC_DAMAGE' or eventType == 'SPELL_DAMAGE' then
 		print(format('EVENT %s TRACK CHECK FOR %s ID %d', eventType, spellName, spellId))
 		local _, ability
@@ -1499,7 +1499,7 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			end
 		end
 	end
---[[ DEBUG ]]
+--[ DEBUG ]]
 	if eventType == 'SPELL_CAST_SUCCESS' then
 		local castedAbility = abilityBySpellId[spellId]
 		if castedAbility then
