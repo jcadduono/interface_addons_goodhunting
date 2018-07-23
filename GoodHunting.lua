@@ -1525,8 +1525,8 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 		end
 		return
 	end
-	if eventType == 'SPELL_DAMAGE' then
-		if Opt.auto_aoe then
+	if Opt.auto_aoe then
+		if eventType == 'SPELL_DAMAGE' or eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
 			local _, ability
 			for _, ability in next, autoAoe.abilities do
 				if spellId == ability.spellId or spellId == ability.spellId2 then
@@ -1534,7 +1534,6 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 				end
 			end
 		end
-		return
 	end
 	if eventType == 'SPELL_AURA_APPLIED' then
 		if spellId == SephuzsSecret.spellId then
