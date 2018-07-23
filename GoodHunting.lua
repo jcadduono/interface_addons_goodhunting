@@ -463,7 +463,7 @@ function Ability:castTime()
 end
 
 function Ability:castRegen()
-	return var.focus_regen * self:castTime()
+	return var.focus_regen * self:castTime() - self:cost()
 end
 
 function Ability:tickTime()
