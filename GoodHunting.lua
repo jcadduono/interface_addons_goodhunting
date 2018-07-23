@@ -598,6 +598,7 @@ SephuzsSecret.cooldown_duration = 30
 ---- Survival
 local Carve = Ability.add(187708, false, true)
 Carve.focus_cost = 35
+Carve:setAutoAoe(true)
 local CoordinatedAssault = Ability.add(266779, true, true)
 CoordinatedAssault.cooldown_duration = 120
 CoordinatedAssault.buff_duration = 20
@@ -632,6 +633,7 @@ WildfireBomb.buff_duration = 6
 WildfireBomb.tick_interval = 1
 WildfireBomb.hasted_cooldown = true
 WildfireBomb.requires_charge = true
+WildfireBomb:setAutoAoe(true)
 ------ Talents
 local AlphaPredator = Ability.add(269737, false, true)
 local AMurderOfCrows = Ability.add(131894, false, true, 131900)
@@ -648,6 +650,7 @@ Butchery.focus_cost = 30
 Butchery.cooldown_duration = 9
 Butchery.hasted_cooldown = true
 Butchery.requires_charge = true
+Butchery:setAutoAoe(true)
 local Chakrams = Ability.add(259391, false, true)
 Chakrams.focus_cost = 30
 Chakrams.cooldown_duration = 20
@@ -668,6 +671,7 @@ PheromoneBomb.buff_duration = 6
 PheromoneBomb.tick_interval = 1
 PheromoneBomb.hasted_cooldown = true
 PheromoneBomb.requires_charge = true
+PheromoneBomb:setAutoAoe(true)
 local Predator = Ability.add(260249, true, true) -- Bloodseeker buff
 local ShrapnelBomb = Ability.add(270335, false, true, 270339) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
 ShrapnelBomb.cooldown_duration = 18
@@ -675,6 +679,7 @@ ShrapnelBomb.buff_duration = 6
 ShrapnelBomb.tick_interval = 1
 ShrapnelBomb.hasted_cooldown = true
 ShrapnelBomb.requires_charge = true
+ShrapnelBomb:setAutoAoe(true)
 local SteelTrap = Ability.add(162488, false, true, 162487)
 SteelTrap.cooldown_duration = 30
 SteelTrap.buff_duration = 20
@@ -692,6 +697,7 @@ VolatileBomb.buff_duration = 6
 VolatileBomb.tick_interval = 1
 VolatileBomb.hasted_cooldown = true
 VolatileBomb.requires_charge = true
+VolatileBomb:setAutoAoe(true)
 local WildfireInfusion = Ability.add(271014, false, true)
 ------ Procs
 
