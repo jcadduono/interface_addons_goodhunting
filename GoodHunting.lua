@@ -645,6 +645,7 @@ local BirdsOfPrey = Ability.add(260331, false, true)
 local Bloodseeker = Ability.add(260248, false, true, 259277)
 Bloodseeker.buff_duration = 8
 Bloodseeker.tick_interval = 2
+Bloodseeker.hasted_ticks = true
 local Butchery = Ability.add(212436, false, true)
 Butchery.focus_cost = 30
 Butchery.cooldown_duration = 9
