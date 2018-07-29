@@ -308,12 +308,16 @@ function Ability.add(spellId, buff, player, spellId2)
 		cooldown_duration = 0,
 		buff_duration = 0,
 		tick_interval = 0,
+		velocity = 0,
 		auraTarget = buff and 'player' or 'target',
 		auraFilter = (buff and 'HELPFUL' or 'HARMFUL') .. (player and '|PLAYER' or '')
 	}
 	setmetatable(ability, Ability)
 	abilities[#abilities + 1] = ability
 	abilityBySpellId[spellId] = ability
+	if spellId2 then
+		abilityBySpellId[spellId2] = ability
+	end
 	return ability
 end
 
@@ -338,6 +342,9 @@ function Ability:usable(seconds)
 end
 
 function Ability:remains()
+	if self:traveling() then
+		return self:duration()
+	end
 	local _, i, id, expires
 	for i = 1, 40 do
 		_, _, _, _, _, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
@@ -362,6 +369,9 @@ function Ability:refreshable()
 end
 
 function Ability:up()
+	if self:traveling() then
+		return true
+	end
 	local _, i, id, expires
 	for i = 1, 40 do
 		_, _, _, _, _, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
@@ -376,6 +386,15 @@ end
 
 function Ability:down()
 	return not self:up()
+end
+
+function Ability:traveling()
+	if self.travel_start then
+		if var.time - self.travel_start < 40 / self.velocity then
+			return true
+		end
+		self.travel_start = nil
+	end
 end
 
 function Ability:ticking()
@@ -606,6 +625,7 @@ CoordinatedAssault.requires_pet = true
 local Harpoon = Ability.add(190925, false, true, 190927)
 Harpoon.cooldown_duration = 20
 Harpoon.buff_duration = 3
+Harpoon.velocity = 70
 local Intimidation = Ability.add(19577, false, true)
 Intimidation.cooldown_duration = 60
 Intimidation.buff_duration = 5
@@ -625,12 +645,14 @@ local SerpentSting = Ability.add(259491, false, true)
 SerpentSting.focus_cost = 20
 SerpentSting.buff_duration = 12
 SerpentSting.tick_interval = 3
+SerpentSting.velocity = 60
 SerpentSting.hasted_ticks = true
 SerpentSting.hasted_duration = true
 local WildfireBomb = Ability.add(259495, false, true, 269747)
 WildfireBomb.cooldown_duration = 18
 WildfireBomb.buff_duration = 6
 WildfireBomb.tick_interval = 1
+WildfireBomb.velocity = 35
 WildfireBomb.hasted_cooldown = true
 WildfireBomb.requires_charge = true
 WildfireBomb:setAutoAoe(true)
@@ -652,9 +674,10 @@ Butchery.cooldown_duration = 9
 Butchery.hasted_cooldown = true
 Butchery.requires_charge = true
 Butchery:setAutoAoe(true)
-local Chakrams = Ability.add(259391, false, true)
+local Chakrams = Ability.add(259391, false, true, 259398)
 Chakrams.focus_cost = 30
 Chakrams.cooldown_duration = 20
+Chakrams.velocity = 30
 local FlankingStrike = Ability.add(269751, false, true)
 FlankingStrike.focus_cost = -30
 FlankingStrike.cooldown_duration = 40
@@ -670,6 +693,7 @@ local PheromoneBomb = Ability.add(270323, false, true, 270332) -- Provided by Wi
 PheromoneBomb.cooldown_duration = 18
 PheromoneBomb.buff_duration = 6
 PheromoneBomb.tick_interval = 1
+PheromoneBomb.velocity = 35
 PheromoneBomb.hasted_cooldown = true
 PheromoneBomb.requires_charge = true
 PheromoneBomb:setAutoAoe(true)
@@ -678,6 +702,7 @@ local ShrapnelBomb = Ability.add(270335, false, true, 270339) -- Provided by Wil
 ShrapnelBomb.cooldown_duration = 18
 ShrapnelBomb.buff_duration = 6
 ShrapnelBomb.tick_interval = 1
+ShrapnelBomb.velocity = 35
 ShrapnelBomb.hasted_cooldown = true
 ShrapnelBomb.requires_charge = true
 ShrapnelBomb:setAutoAoe(true)
@@ -696,6 +721,7 @@ local VolatileBomb = Ability.add(271045, false, true, 271049) -- Provided by Wil
 VolatileBomb.cooldown_duration = 18
 VolatileBomb.buff_duration = 6
 VolatileBomb.tick_interval = 1
+VolatileBomb.velocity = 35
 VolatileBomb.hasted_cooldown = true
 VolatileBomb.requires_charge = true
 VolatileBomb:setAutoAoe(true)
@@ -1495,65 +1521,61 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 	if srcGUID ~= var.player and srcGUID ~= var.pet then
 		return
 	end
+	local castedAbility = abilityBySpellId[spellId]
+	if not castedAbility then
+		return
+	end
 --[[ DEBUG ]
+	print(format('EVENT %s TRACK CHECK FOR %s ID %d', eventType, spellName, spellId))
 	if eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' or eventType == 'SPELL_PERIODIC_DAMAGE' or eventType == 'SPELL_DAMAGE' then
-		print(format('EVENT %s TRACK CHECK FOR %s ID %d', eventType, spellName, spellId))
-		local _, ability
-		for _, ability in next, abilities do
-			if spellId == ability.spellId or spellId == ability.spellId2 then
-				print(format('%s: %s - time: %.2f - time since last: %.2f', eventType, spellName, timeStamp, timeStamp - (ability.last_trigger or timeStamp)))
-				ability.last_trigger = timeStamp
-				break
-			end
-		end
+		print(format('%s: %s - time: %.2f - time since last: %.2f', eventType, spellName, timeStamp, timeStamp - (castedAbility.last_trigger or timeStamp)))
+		castedAbility.last_trigger = timeStamp
 	end
 --[ DEBUG ]]
 	if eventType == 'SPELL_CAST_SUCCESS' then
-		local castedAbility = abilityBySpellId[spellId]
-		if castedAbility then
-			var.last_ability = castedAbility
-			if var.last_ability.triggers_gcd then
-				PreviousGCD[10] = nil
-				table.insert(PreviousGCD, 1, castedAbility)
-			end
-			if Opt.previous and ghPanel:IsVisible() then
-				ghPreviousPanel.ability = var.last_ability
-				ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
-				ghPreviousPanel.icon:SetTexture(var.last_ability.icon)
-				ghPreviousPanel:Show()
-			end
+		var.last_ability = castedAbility
+		if castedAbility.triggers_gcd then
+			PreviousGCD[10] = nil
+			table.insert(PreviousGCD, 1, castedAbility)
+		end
+		if castedAbility.velocity ~= 0 then
+			castedAbility.travel_start = GetTime()
+		end
+		if Opt.previous and ghPanel:IsVisible() then
+			ghPreviousPanel.ability = castedAbility
+			ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
+			ghPreviousPanel.icon:SetTexture(castedAbility.icon)
+			ghPreviousPanel:Show()
 		end
 		return
 	end
 	if eventType == 'SPELL_MISSED' then
-		if Opt.previous and Opt.miss_effect and ghPanel:IsVisible() and ghPreviousPanel.ability then
-			if spellId == ghPreviousPanel.ability.spellId or spellId == ghPreviousPanel.ability.spellId2 then
-				ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\misseffect.blp')
-			end
+		if Opt.previous and Opt.miss_effect and ghPanel:IsVisible() and castedAbility == ghPreviousPanel.ability then
+			ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\misseffect.blp')
 		end
-		return
+		if castedAbility.travel_start then
+			castedAbility.travel_start = nil
+		end
 	end
-	if Opt.auto_aoe then
-		if eventType == 'SPELL_DAMAGE' or eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
-			local _, ability
-			for _, ability in next, autoAoe.abilities do
-				if spellId == ability.spellId or spellId == ability.spellId2 then
-					ability:recordTargetHit(dstGUID)
-				end
-			end
+	if eventType == 'SPELL_DAMAGE' or eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
+		if Opt.auto_aoe and castedAbility.auto_aoe then
+			castedAbility:recordTargetHit(dstGUID)
+		end
+		if castedAbility.travel_start then
+			castedAbility.travel_start = nil
 		end
 	end
 	if eventType == 'SPELL_AURA_APPLIED' then
-		if spellId == SephuzsSecret.spellId then
+		if castedAbility == SephuzsSecret then
 			SephuzsSecret.cooldown_start = GetTime()
 			return
 		end
 	end
-	if trackAuras.abilities[spellId] then
+	if castedAbility.aura_targets then
 		if eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
-			trackAuras.abilities[spellId]:applyAura(dstGUID)
+			castedAbility:applyAura(dstGUID)
 		elseif eventType == 'SPELL_AURA_REMOVED' or eventType == 'UNIT_DIED' or eventType == 'UNIT_DESTROYED' or eventType == 'UNIT_DISSIPATES' or eventType == 'SPELL_INSTAKILL' or eventType == 'PARTY_KILL' then
-			trackAuras.abilities[spellId]:removeAura(dstGUID)
+			castedAbility:removeAura(dstGUID)
 		end
 	end
 end
