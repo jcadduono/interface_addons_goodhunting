@@ -1398,15 +1398,15 @@ local ResourceFramePoints = {
 	['blizzard'] = {
 		[SPEC.BEASTMASTERY] = {
 			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -6 }
+			['below'] = { 'TOP', 'BOTTOM', 0, -16 }
 		},
 		[SPEC.MARKSMANSHIP] = {
 			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -6 }
+			['below'] = { 'TOP', 'BOTTOM', 0, -16 }
 		},
 		[SPEC.SURVIVAL] = {
 			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -6 }
+			['below'] = { 'TOP', 'BOTTOM', 0, -16 }
 		}
 	},
 	['kui'] = {
