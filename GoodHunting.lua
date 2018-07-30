@@ -74,7 +74,8 @@ local function InitializeVariables()
 		aoe = false,
 		auto_aoe = false,
 		auto_aoe_ttl = 10,
-		pot = false
+		pot = false,
+		mend_threshold = 65
 	})
 end
 
@@ -604,9 +605,17 @@ end
 
 -- Hunter Abilities
 ---- Multiple Specializations
+local CallPet = Ability.add(883, false, true)
 local CounterShot = Ability.add(147362, false, true)
 CounterShot.cooldown_duration = 24
 CounterShot.triggers_gcd = false
+local MendPet = Ability.add(136, true, true)
+MendPet.cooldown_duration = 10
+MendPet.buff_duration = 10
+MendPet.requires_pet = true
+MendPet.auraTarget = 'pet'
+local RevivePet = Ability.add(982, false, true)
+RevivePet.focus_cost = 10
 ------ Procs
 local SephuzsSecret = Ability.add(208052, true, true)
 SephuzsSecret.cooldown_duration = 30
@@ -898,6 +907,33 @@ function SephuzsSecret:cooldown()
 	return self.cooldown_duration - (var.time - self.cooldown_start)
 end
 
+function CallPet:usable()
+	if UnitExists('pet') or IsFlying() then
+		return false
+	end
+	return Ability.usable(self)
+end
+
+function MendPet:usable()
+	if not Ability.usable(self) then
+		return false
+	end
+	if Opt.mend_threshold == 0 then
+		return false
+	end
+	if (UnitHealth('pet') / UnitHealthMax('pet') * 100) >= Opt.mend_threshold then
+		return false
+	end
+	return true
+end
+
+function RevivePet:usable()
+	if not UnitExists('pet') or (UnitExists('pet') and not UnitIsDead('pet')) then
+		return false
+	end
+	return Ability.usable(self)
+end
+
 -- End Ability Modifications
 
 local function UpdateVars()
@@ -993,6 +1029,13 @@ APL[SPEC.MARKSMANSHIP].main = function(self)
 end
 
 APL[SPEC.SURVIVAL].main = function(self)
+	if CallPet:usable() then
+		UseExtra(CallPet)
+	elseif RevivePet:usable() then
+		UseExtra(RevivePet)
+	elseif MendPet:usable() then
+		UseExtra(MendPet)
+	end
 	if TimeInCombat() == 0 then
 		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
 			return RepurposedFelFocuser
@@ -1972,6 +2015,12 @@ function SlashCmdList.GoodHunting(msg, editbox)
 		end
 		return print('Good Hunting - Show Prolonged Power potions in cooldown UI: ' .. (Opt.pot and '|cFF00C000On' or '|cFFC00000Off'))
 	end
+	if startsWith(msg[1], 'mend') then
+		if msg[2] then
+			Opt.mend_threshold = tonumber(msg[2]) or 65
+		end
+		return print('Good Hunting - Recommend Mend Pet when pet\'s health is below: |cFFFFD000' .. Opt.mend_threshold .. '|r%')
+	end
 	if msg[1] == 'reset' then
 		ghPanel:ClearAllPoints()
 		ghPanel:SetPoint('CENTER', 0, -169)
@@ -2001,6 +2050,7 @@ function SlashCmdList.GoodHunting(msg, editbox)
 		'auto |cFF00C000on|r/|cFFC00000off|r  - automatically change target mode on AoE spells',
 		'ttl |cFFFFD000[seconds]|r  - time target exists in auto AoE after being hit (default is 10 seconds)',
 		'pot |cFF00C000on|r/|cFFC00000off|r - show Prolonged Power potions in cooldown UI',
+		'mend |cFFFFD000[percent]|r  - health percentage to recommend Mend Pet at (default is 65%, 0 to disable)',
 		'|cFFFFD000reset|r - reset the location of the Good Hunting UI to default',
 	} do
 		print('  ' .. SLASH_GoodHunting1 .. ' ' .. cmd)
