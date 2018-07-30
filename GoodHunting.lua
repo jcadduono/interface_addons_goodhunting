@@ -388,12 +388,22 @@ function Ability:down()
 	return not self:up()
 end
 
+function Ability:setVelocity(velocity)
+	if velocity > 0 then
+		self.velocity = velocity
+		self.travel_start = {}
+	else
+		self.travel_start = nil
+		self.velocity = 0
+	end
+end
+
 function Ability:traveling()
-	if self.travel_start then
-		if var.time - self.travel_start < 40 / self.velocity then
+	if self.travel_start and self.travel_start[Target.guid] then
+		if var.time - self.travel_start[Target.guid] < 40 / self.velocity then
 			return true
 		end
-		self.travel_start = nil
+		self.travel_start[Target.guid] = nil
 	end
 end
 
@@ -553,7 +563,7 @@ function trackAuras:purge()
 	local _, ability, guid, expires
 	for _, ability in next, self.abilities do
 		for guid, expires in next, ability.aura_targets do
-			if combatStartTime == 0 or expires <= now then
+			if expires <= now then
 				ability:removeAura(guid)
 			end
 		end
@@ -625,7 +635,7 @@ CoordinatedAssault.requires_pet = true
 local Harpoon = Ability.add(190925, false, true, 190927)
 Harpoon.cooldown_duration = 20
 Harpoon.buff_duration = 3
-Harpoon.velocity = 70
+Harpoon:setVelocity(70)
 local Intimidation = Ability.add(19577, false, true)
 Intimidation.cooldown_duration = 60
 Intimidation.buff_duration = 5
@@ -645,16 +655,16 @@ local SerpentSting = Ability.add(259491, false, true)
 SerpentSting.focus_cost = 20
 SerpentSting.buff_duration = 12
 SerpentSting.tick_interval = 3
-SerpentSting.velocity = 60
 SerpentSting.hasted_ticks = true
 SerpentSting.hasted_duration = true
+SerpentSting:setVelocity(60)
 local WildfireBomb = Ability.add(259495, false, true, 269747)
 WildfireBomb.cooldown_duration = 18
 WildfireBomb.buff_duration = 6
 WildfireBomb.tick_interval = 1
-WildfireBomb.velocity = 35
 WildfireBomb.hasted_cooldown = true
 WildfireBomb.requires_charge = true
+WildfireBomb:setVelocity(35)
 WildfireBomb:setAutoAoe(true)
 ------ Talents
 local AlphaPredator = Ability.add(269737, false, true)
@@ -677,7 +687,7 @@ Butchery:setAutoAoe(true)
 local Chakrams = Ability.add(259391, false, true, 259398)
 Chakrams.focus_cost = 30
 Chakrams.cooldown_duration = 20
-Chakrams.velocity = 30
+Chakrams:setVelocity(30)
 local FlankingStrike = Ability.add(269751, false, true)
 FlankingStrike.focus_cost = -30
 FlankingStrike.cooldown_duration = 40
@@ -693,18 +703,18 @@ local PheromoneBomb = Ability.add(270323, false, true, 270332) -- Provided by Wi
 PheromoneBomb.cooldown_duration = 18
 PheromoneBomb.buff_duration = 6
 PheromoneBomb.tick_interval = 1
-PheromoneBomb.velocity = 35
 PheromoneBomb.hasted_cooldown = true
 PheromoneBomb.requires_charge = true
+PheromoneBomb:setVelocity(35)
 PheromoneBomb:setAutoAoe(true)
 local Predator = Ability.add(260249, true, true) -- Bloodseeker buff
 local ShrapnelBomb = Ability.add(270335, false, true, 270339) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
 ShrapnelBomb.cooldown_duration = 18
 ShrapnelBomb.buff_duration = 6
 ShrapnelBomb.tick_interval = 1
-ShrapnelBomb.velocity = 35
 ShrapnelBomb.hasted_cooldown = true
 ShrapnelBomb.requires_charge = true
+ShrapnelBomb:setVelocity(35)
 ShrapnelBomb:setAutoAoe(true)
 local SteelTrap = Ability.add(162488, false, true, 162487)
 SteelTrap.cooldown_duration = 30
@@ -721,9 +731,9 @@ local VolatileBomb = Ability.add(271045, false, true, 271049) -- Provided by Wil
 VolatileBomb.cooldown_duration = 18
 VolatileBomb.buff_duration = 6
 VolatileBomb.tick_interval = 1
-VolatileBomb.velocity = 35
 VolatileBomb.hasted_cooldown = true
 VolatileBomb.requires_charge = true
+VolatileBomb:setVelocity(35)
 VolatileBomb:setAutoAoe(true)
 local WildfireInfusion = Ability.add(271014, false, true)
 ------ Procs
@@ -1538,8 +1548,8 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			PreviousGCD[10] = nil
 			table.insert(PreviousGCD, 1, castedAbility)
 		end
-		if castedAbility.velocity ~= 0 then
-			castedAbility.travel_start = GetTime()
+		if castedAbility.travel_start then
+			castedAbility.travel_start[dstGUID] = GetTime()
 		end
 		if Opt.previous and ghPanel:IsVisible() then
 			ghPreviousPanel.ability = castedAbility
@@ -1549,20 +1559,15 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 		end
 		return
 	end
-	if eventType == 'SPELL_MISSED' then
-		if Opt.previous and Opt.miss_effect and ghPanel:IsVisible() and castedAbility == ghPreviousPanel.ability then
-			ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\misseffect.blp')
+	if eventType == 'SPELL_MISSED' or eventType == 'SPELL_DAMAGE' or eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
+		if castedAbility.travel_start and castedAbility.travel_start[dstGUID] then
+			castedAbility.travel_start[dstGUID] = nil
 		end
-		if castedAbility.travel_start then
-			castedAbility.travel_start = nil
-		end
-	end
-	if eventType == 'SPELL_DAMAGE' or eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
 		if Opt.auto_aoe and castedAbility.auto_aoe then
 			castedAbility:recordTargetHit(dstGUID)
 		end
-		if castedAbility.travel_start then
-			castedAbility.travel_start = nil
+		if Opt.previous and Opt.miss_effect and eventType == 'SPELL_MISSED' and ghPanel:IsVisible() and castedAbility == ghPreviousPanel.ability then
+			ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\misseffect.blp')
 		end
 	end
 	if eventType == 'SPELL_AURA_APPLIED' then
@@ -1640,9 +1645,20 @@ end
 
 function events:PLAYER_REGEN_ENABLED()
 	combatStartTime = 0
-	trackAuras:purge()
+	local _, ability, guid
+	for _, ability in next, abilities do
+		if ability.travel_start then
+			for guid in next, ability.travel_start do
+				ability.travel_start[guid] = nil
+			end
+		end
+		if ability.aura_targets then
+			for guid in next, ability.aura_targets do
+				ability.aura_targets[guid] = nil
+			end
+		end
+	end
 	if Opt.auto_aoe then
-		local guid
 		for guid in next, autoAoe.targets do
 			autoAoe.targets[guid] = nil
 		end
