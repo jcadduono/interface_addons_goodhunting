@@ -1101,13 +1101,13 @@ actions+=/raptor_strike,target_if=min:dot.internal_bleeding.stack
 	if Chakrams:usable() and Enemies() > 1 then
 		return Chakrams
 	end
-	if KillCommand:usable() and (Focus() + KillCommand:castRegen()) < FocusMax() and TipOfTheSpear:stack() < 3 and Enemies() < 2 then
+	if KillCommand:usable() and (Focus() + KillCommand:castRegen()) < (FocusMax() - 5) and TipOfTheSpear:stack() < 3 and Enemies() < 2 then
 		return KillCommand
 	end
-	if WildfireBomb:usable() and ((Focus() + WildfireBomb:castRegen()) < FocusMax() or Enemies() > 1) and (WildfireBomb:refreshable() and MongooseFury:down() or WildfireBomb:fullRechargeTime() < GCD()) then
+	if WildfireBomb:usable() and ((Focus() + WildfireBomb:castRegen()) < (FocusMax() - 5) or Enemies() > 1) and (WildfireBomb:refreshable() and MongooseFury:down() or WildfireBomb:fullRechargeTime() < GCD()) then
 		return WildfireBomb
 	end
-	if KillCommand:usable() and (Focus() + KillCommand:castRegen()) < FocusMax() and TipOfTheSpear:stack() < 3 then
+	if KillCommand:usable() and (Focus() + KillCommand:castRegen()) < (FocusMax() - 5) and TipOfTheSpear:stack() < 3 then
 		return KillCommand
 	end
 	if Butchery:usable() and ((not WildfireInfusion.known or Butchery:fullRechargeTime() < GCD()) and Enemies() > 3 or (WildfireInfusion.known and ShrapnelBomb:up() and InternalBleeding:stack() < 3)) then
