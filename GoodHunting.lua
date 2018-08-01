@@ -1535,6 +1535,24 @@ function events:SPELL_UPDATE_COOLDOWN()
 	end
 end
 
+-- hack to support Wildfire Bomb's changing spells on each cast
+function events:SPELL_UPDATE_ICON()
+	if WildfireInfusion.known then
+		local _, _, _, _, _, _, spellId = GetSpellInfo(WildfireBomb.name)
+		ShrapnelBomb.known = spellId == ShrapnelBomb.spellId
+		PheromoneBomb.known = spellId == PheromoneBomb.spellId
+		VolatileBomb.known = spellId == VolatileBomb.spellId
+		if ShrapnelBomb.known then
+			WildfireInfusion.current = ShrapnelBomb
+		elseif PheromoneBomb.known then
+			WildfireInfusion.current = PheromoneBomb
+		elseif VolatileBomb.known then
+			WildfireInfusion.current = VolatileBomb
+		end
+		WildfireBomb.icon = WildfireInfusion.current.icon
+	end
+end
+
 function events:ADDON_LOADED(name)
 	if name == 'GoodHunting' then
 		Opt = GoodHunting
