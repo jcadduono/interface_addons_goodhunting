@@ -907,6 +907,30 @@ function SephuzsSecret:cooldown()
 	return self.cooldown_duration - (var.time - self.cooldown_start)
 end
 
+-- hack to support Wildfire Bomb's changing spells on each cast
+function WildfireInfusion:update()
+	local _, _, _, _, _, _, spellId = GetSpellInfo(WildfireBomb.name)
+	if self.current and spellId == self.current.spellId then
+		return -- not a bomb change
+	end
+	ShrapnelBomb.known = spellId == ShrapnelBomb.spellId
+	PheromoneBomb.known = spellId == PheromoneBomb.spellId
+	VolatileBomb.known = spellId == VolatileBomb.spellId
+	if ShrapnelBomb.known then
+		self.current = ShrapnelBomb
+	elseif PheromoneBomb.known then
+		self.current = PheromoneBomb
+	elseif VolatileBomb.known then
+		self.current = VolatileBomb
+	else
+		self.current = WildfireBomb
+	end
+	WildfireBomb.icon = self.current.icon
+	if var.main == WildfireBomb then
+		var.main = nil -- reset current ability if it was a bomb
+	end
+end
+
 function CallPet:usable()
 	if UnitExists('pet') or IsFlying() then
 		return false
@@ -1535,24 +1559,6 @@ function events:SPELL_UPDATE_COOLDOWN()
 	end
 end
 
--- hack to support Wildfire Bomb's changing spells on each cast
-function events:SPELL_UPDATE_ICON()
-	if WildfireInfusion.known then
-		local _, _, _, _, _, _, spellId = GetSpellInfo(WildfireBomb.name)
-		ShrapnelBomb.known = spellId == ShrapnelBomb.spellId
-		PheromoneBomb.known = spellId == PheromoneBomb.spellId
-		VolatileBomb.known = spellId == VolatileBomb.spellId
-		if ShrapnelBomb.known then
-			WildfireInfusion.current = ShrapnelBomb
-		elseif PheromoneBomb.known then
-			WildfireInfusion.current = PheromoneBomb
-		elseif VolatileBomb.known then
-			WildfireInfusion.current = VolatileBomb
-		end
-		WildfireBomb.icon = WildfireInfusion.current.icon
-	end
-end
-
 function events:ADDON_LOADED(name)
 	if name == 'GoodHunting' then
 		Opt = GoodHunting
@@ -1736,6 +1742,12 @@ function events:PLAYER_EQUIPMENT_CHANGED()
 	ItemEquipped.SephuzsSecret = Equipped("Sephuz's Secret")
 end
 
+function events:SPELL_UPDATE_ICON()
+	if WildfireInfusion.known then
+		WildfireInfusion:update()
+	end
+end
+
 function events:PLAYER_SPECIALIZATION_CHANGED(unitName)
 	if unitName == 'player' then
 		local _, i
@@ -1751,6 +1763,7 @@ function events:PLAYER_SPECIALIZATION_CHANGED(unitName)
 		currentSpec = GetSpecialization() or 0
 		GoodHunting_SetTargetMode(1)
 		UpdateTargetInfo()
+		events:SPELL_UPDATE_ICON()
 	end
 end
 
