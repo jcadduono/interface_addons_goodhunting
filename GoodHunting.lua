@@ -876,13 +876,23 @@ local function BloodlustActive()
 end
 
 local function TargetIsStunnable()
+	if UnitIsPlayer('target') then
+		return true
+	end
 	if Target.boss then
+		return false
+	end
+	if var.instance == 'raid' then
 		return false
 	end
 	if UnitHealthMax('target') > UnitHealthMax('player') * 25 then
 		return false
 	end
 	return true
+end
+
+local function InArenaOrBattleground()
+	return var.instance == 'arena' or var.instance == 'pvp'
 end
 
 -- End Helpful Functions
@@ -1014,41 +1024,49 @@ local APL = {
 
 APL[SPEC.BEASTMASTERY].main = function(self)
 	if TimeInCombat() == 0 then
-		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
-			return RepurposedFelFocuser
-		end
-		if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 300 then
-			return LightforgedAugmentRune
-		end
-		if Opt.pot and PotionOfProlongedPower:usable() then
-			UseCooldown(PotionOfProlongedPower)
+		if not InArenaOrBattleground() then
+			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
+				return RepurposedFelFocuser
+			end
+			if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 300 then
+				return LightforgedAugmentRune
+			end
+			if Opt.pot and PotionOfProlongedPower:usable() then
+				UseCooldown(PotionOfProlongedPower)
+			end
 		end
 	end
-	if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
-		UseCooldown(RepurposedFelFocuser)
-	end
-	if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
-		UseCooldown(LightforgedAugmentRune)
+	if not InArenaOrBattleground() then
+		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
+			UseCooldown(RepurposedFelFocuser)
+		end
+		if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
+			UseCooldown(LightforgedAugmentRune)
+		end
 	end
 end
 
 APL[SPEC.MARKSMANSHIP].main = function(self)
 	if TimeInCombat() == 0 then
-		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
-			return RepurposedFelFocuser
-		end
-		if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 300 then
-			return LightforgedAugmentRune
-		end
-		if Opt.pot and PotionOfProlongedPower:usable() then
-			UseCooldown(PotionOfProlongedPower)
+		if not InArenaOrBattleground() then
+			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
+				return RepurposedFelFocuser
+			end
+			if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 300 then
+				return LightforgedAugmentRune
+			end
+			if Opt.pot and PotionOfProlongedPower:usable() then
+				UseCooldown(PotionOfProlongedPower)
+			end
 		end
 	end
-	if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
-		UseCooldown(RepurposedFelFocuser)
-	end
-	if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
-		UseCooldown(LightforgedAugmentRune)
+	if not InArenaOrBattleground() then
+		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
+			UseCooldown(RepurposedFelFocuser)
+		end
+		if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
+			UseCooldown(LightforgedAugmentRune)
+		end
 	end
 end
 
@@ -1061,24 +1079,31 @@ APL[SPEC.SURVIVAL].main = function(self)
 		UseExtra(MendPet)
 	end
 	if TimeInCombat() == 0 then
-		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
-			return RepurposedFelFocuser
-		end
-		if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 300 then
-			return LightforgedAugmentRune
-		end
-		if Opt.pot and PotionOfProlongedPower:usable() then
-			UseCooldown(PotionOfProlongedPower)
+		if not InArenaOrBattleground() then
+			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
+				return RepurposedFelFocuser
+			end
+			if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 300 then
+				return LightforgedAugmentRune
+			end
+			if Opt.pot and PotionOfProlongedPower:usable() then
+				UseCooldown(PotionOfProlongedPower)
+			end
 		end
 		if Harpoon:usable() then
 			UseCooldown(Harpoon)
 		end
 	end
-	if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
-		UseCooldown(RepurposedFelFocuser)
-	end
-	if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
-		UseCooldown(LightforgedAugmentRune)
+	if not InArenaOrBattleground() then
+		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
+			UseCooldown(RepurposedFelFocuser)
+		end
+		if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
+			UseCooldown(LightforgedAugmentRune)
+		end
+		if Opt.pot and PotionOfProlongedPower:usable() and CoordinatedAssault:up() and BloodlustActive() then
+			UseCooldown(PotionOfProlongedPower)
+		end
 	end
 --[[
 actions=auto_attack
@@ -1109,9 +1134,6 @@ actions+=/mongoose_bite,target_if=min:dot.internal_bleeding.stack,if=buff.mongoo
 actions+=/butchery
 actions+=/raptor_strike,target_if=min:dot.internal_bleeding.stack
 ]]
-	if Opt.pot and PotionOfProlongedPower:usable() and CoordinatedAssault:up() and BloodlustActive() then
-		UseCooldown(PotionOfProlongedPower)
-	end
 	var.can_gcd = not MongooseBite.known or MongooseFury:down() or ((MongooseFury:remains() - (((MongooseFury:remains() * FocusRegen() + Focus()) % MongooseBite:cost()) * GCD())) > GCD())
 	if SteelTrap:usable() then
 		UseCooldown(SteelTrap)
@@ -1681,7 +1703,15 @@ local function UpdateTargetInfo()
 		end
 	end
 	Target.level = UnitLevel('target')
-	Target.boss = Target.level == -1 or (Target.level >= UnitLevel('player') + 2 and not UnitInRaid('player'))
+	if UnitIsPlayer('target') then
+		Target.boss = false
+	elseif Target.level == -1 then
+		Target.boss = true
+	elseif var.instance == 'party' and Target.level >= UnitLevel('player') + 2 then
+		Target.boss = true
+	else
+		Target.boss = false
+	end
 	Target.hostile = UnitCanAttack('player', 'target') and not UnitIsDead('target')
 	if Target.hostile or Opt.always_on then
 		UpdateCombat()
@@ -1774,6 +1804,8 @@ function events:PLAYER_ENTERING_WORLD()
 		CreateOverlayGlows()
 		HookResourceFrame()
 	end
+	local _
+	_, var.instance = IsInInstance()
 	var.player = UnitGUID('player')
 	UpdateVars()
 end
