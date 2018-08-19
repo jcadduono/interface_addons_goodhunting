@@ -937,7 +937,7 @@ function WildfireInfusion:update()
 	end
 	WildfireBomb.icon = self.current.icon
 	if var.main == WildfireBomb then
-		var.main = nil -- reset current ability if it was a bomb
+		var.main = false -- reset current ability if it was a bomb
 	end
 end
 
