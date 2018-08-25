@@ -102,14 +102,9 @@ local Target = {
 -- list of previous GCD abilities
 local PreviousGCD = {}
 
--- tier set equipped pieces count
-local Tier = {
-	T21P = 0
-}
-
--- legendary item equipped
+-- items equipped with special effects
 local ItemEquipped = {
-	SephuzsSecret = false
+
 }
 
 local var = {
@@ -617,8 +612,7 @@ MendPet.auraTarget = 'pet'
 local RevivePet = Ability.add(982, false, true)
 RevivePet.focus_cost = 10
 ------ Procs
-local SephuzsSecret = Ability.add(208052, true, true)
-SephuzsSecret.cooldown_duration = 30
+
 ------ Talents
 
 ---- Beast Mastery
@@ -747,8 +741,6 @@ VolatileBomb:setAutoAoe(true)
 local WildfireInfusion = Ability.add(271014, false, true)
 ------ Procs
 
--- Tier Bonuses & Legendaries
-
 -- Racials
 
 -- Trinket Effects
@@ -805,8 +797,6 @@ function InventoryItem:usable(seconds)
 end
 
 -- Inventory Items
-local LightforgedAugmentRune = InventoryItem.add(153023)
-LightforgedAugmentRune.buff = Ability.add(224001, true, true)
 local FlaskOfTheSeventhDemon = InventoryItem.add(127848)
 FlaskOfTheSeventhDemon.buff = Ability.add(188033, true, true)
 local PotionOfProlongedPower = InventoryItem.add(142117)
@@ -904,17 +894,6 @@ function SerpentSting:cost()
 		return 0
 	end
 	return Ability.cost(self)
-end
-
-function SephuzsSecret:cooldown()
-	if not self.cooldown_start then
-		return 0
-	end
-	if var.time >= self.cooldown_start + self.cooldown_duration then
-		self.cooldown_start = nil
-		return 0
-	end
-	return self.cooldown_duration - (var.time - self.cooldown_start)
 end
 
 -- hack to support Wildfire Bomb's changing spells on each cast
@@ -1028,9 +1007,6 @@ APL[SPEC.BEASTMASTERY].main = function(self)
 			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
 				return RepurposedFelFocuser
 			end
-			if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 300 then
-				return LightforgedAugmentRune
-			end
 			if Opt.pot and PotionOfProlongedPower:usable() then
 				UseCooldown(PotionOfProlongedPower)
 			end
@@ -1039,9 +1015,6 @@ APL[SPEC.BEASTMASTERY].main = function(self)
 	if not InArenaOrBattleground() then
 		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
 			UseCooldown(RepurposedFelFocuser)
-		end
-		if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
-			UseCooldown(LightforgedAugmentRune)
 		end
 	end
 end
@@ -1052,9 +1025,6 @@ APL[SPEC.MARKSMANSHIP].main = function(self)
 			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
 				return RepurposedFelFocuser
 			end
-			if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 300 then
-				return LightforgedAugmentRune
-			end
 			if Opt.pot and PotionOfProlongedPower:usable() then
 				UseCooldown(PotionOfProlongedPower)
 			end
@@ -1063,9 +1033,6 @@ APL[SPEC.MARKSMANSHIP].main = function(self)
 	if not InArenaOrBattleground() then
 		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
 			UseCooldown(RepurposedFelFocuser)
-		end
-		if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
-			UseCooldown(LightforgedAugmentRune)
 		end
 	end
 end
@@ -1083,9 +1050,6 @@ APL[SPEC.SURVIVAL].main = function(self)
 			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
 				return RepurposedFelFocuser
 			end
-			if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 300 then
-				return LightforgedAugmentRune
-			end
 			if Opt.pot and PotionOfProlongedPower:usable() then
 				UseCooldown(PotionOfProlongedPower)
 			end
@@ -1098,16 +1062,12 @@ APL[SPEC.SURVIVAL].main = function(self)
 		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
 			UseCooldown(RepurposedFelFocuser)
 		end
-		if LightforgedAugmentRune:usable() and LightforgedAugmentRune.buff:remains() < 30 then
-			UseCooldown(LightforgedAugmentRune)
-		end
 		if Opt.pot and PotionOfProlongedPower:usable() and CoordinatedAssault:up() and BloodlustActive() then
 			UseCooldown(PotionOfProlongedPower)
 		end
 	end
 --[[
 actions=auto_attack
-actions+=/muzzle,if=equipped.sephuzs_secret&target.debuff.casting.react&cooldown.buff_sephuzs_secret.up&!buff.sephuzs_secret.up
 actions+=/use_items
 actions+=/berserking,if=cooldown.coordinated_assault.remains>30
 actions+=/blood_fury,if=cooldown.coordinated_assault.remains>30
@@ -1189,9 +1149,6 @@ actions+=/raptor_strike,target_if=min:dot.internal_bleeding.stack
 end
 
 APL.Interrupt = function(self)
-	if Opt.interrupt == 'sephuz' and not SephuzsSecret:ready() then
-		return
-	end
 	if CounterShot:usable() then
 		return CounterShot
 	end
@@ -1386,17 +1343,6 @@ function Equipped(name, slot)
 		end
 	end
 	return false
-end
-
-function EquippedTier(name)
-	local slot = { 1, 3, 5, 7, 10, 15 }
-	local equipped, i = 0
-	for i = 1, #slot do
-		if Equipped(name, slot) then
-			equipped = equipped + 1
-		end
-	end
-	return equipped
 end
 
 local function UpdateDraggable()
@@ -1659,12 +1605,6 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\misseffect.blp')
 		end
 	end
-	if eventType == 'SPELL_AURA_APPLIED' then
-		if castedAbility == SephuzsSecret then
-			SephuzsSecret.cooldown_start = GetTime()
-			return
-		end
-	end
 	if castedAbility.aura_targets then
 		if eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
 			castedAbility:applyAura(dstGUID)
@@ -1768,8 +1708,7 @@ function events:PLAYER_REGEN_ENABLED()
 end
 
 function events:PLAYER_EQUIPMENT_CHANGED()
-	Tier.T21P = EquippedTier("Serpentstalker ")
-	ItemEquipped.SephuzsSecret = Equipped("Sephuz's Secret")
+
 end
 
 function events:SPELL_UPDATE_ICON()
@@ -2052,13 +1991,9 @@ function SlashCmdList.GoodHunting(msg, editbox)
 	end
 	if startsWith(msg[1], 'int') then
 		if msg[2] then
-			if startsWith(msg[2], 'sep') then
-				Opt.interrupt = 'sephuz'
-			else
-				Opt.interrupt = msg[2] == 'on'
-			end
+			Opt.interrupt = msg[2] == 'on'
 		end
-		return print('Good Hunting - Show an icon for interruptable spells: ' .. (Opt.interrupt == 'sephuz' and '|cFFFFD000If Sephuz\'s Secret is off cooldown' or Opt.interrupt and '|cFF00C000On' or '|cFFC00000Off'))
+		return print('Good Hunting - Show an icon for interruptable spells: ' .. (Opt.interrupt and '|cFF00C000On' or '|cFFC00000Off'))
 	end
 	if msg[1] == 'auto' then
 		if msg[2] then
@@ -2109,7 +2044,7 @@ function SlashCmdList.GoodHunting(msg, editbox)
 		'aoe |cFF00C000on|r/|cFFC00000off|r - allow clicking main ability icon to toggle amount of targets (disables moving)',
 		'bossonly |cFF00C000on|r/|cFFC00000off|r - only use cooldowns on bosses',
 		'hidespec |cFFFFD000beastmastery|r/|cFFFFD000marksmanship|r/|cFFFFD000survival|r - toggle disabling Good Hunting for specializations',
-		'interrupt |cFF00C000on|r/|cFFC00000off|r/|cFFFFD000sephuz|r - show an icon for interruptable spells',
+		'interrupt |cFF00C000on|r/|cFFC00000off|r - show an icon for interruptable spells',
 		'auto |cFF00C000on|r/|cFFC00000off|r  - automatically change target mode on AoE spells',
 		'ttl |cFFFFD000[seconds]|r  - time target exists in auto AoE after being hit (default is 10 seconds)',
 		'pot |cFF00C000on|r/|cFFC00000off|r - show Prolonged Power potions in cooldown UI',
