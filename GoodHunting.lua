@@ -799,9 +799,11 @@ end
 -- Inventory Items
 local FlaskOfTheSeventhDemon = InventoryItem.add(127848)
 FlaskOfTheSeventhDemon.buff = Ability.add(188033, true, true)
-local PotionOfProlongedPower = InventoryItem.add(142117)
-PotionOfProlongedPower.buff = Ability.add(229206, true, true)
-PotionOfProlongedPower.buff.triggers_gcd = false
+local FlaskOfTheCurrents = InventoryItem.add(152638)
+FlaskOfTheCurrents.buff = Ability.add(251836, true, true)
+local BattlePotionOfAgility = InventoryItem.add(163223)
+BattlePotionOfAgility.buff = Ability.add(279152, true, true)
+BattlePotionOfAgility.buff.triggers_gcd = false
 local RepurposedFelFocuser = InventoryItem.add(147707)
 RepurposedFelFocuser.buff = Ability.add(242551, true, true)
 -- End Inventory Items
@@ -1004,16 +1006,16 @@ local APL = {
 APL[SPEC.BEASTMASTERY].main = function(self)
 	if TimeInCombat() == 0 then
 		if not InArenaOrBattleground() then
-			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
+			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
 				return RepurposedFelFocuser
 			end
-			if Opt.pot and PotionOfProlongedPower:usable() then
-				UseCooldown(PotionOfProlongedPower)
+			if Opt.pot and BattlePotionOfAgility:usable() then
+				UseCooldown(BattlePotionOfAgility)
 			end
 		end
 	end
 	if not InArenaOrBattleground() then
-		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
+		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
 			UseCooldown(RepurposedFelFocuser)
 		end
 	end
@@ -1022,16 +1024,16 @@ end
 APL[SPEC.MARKSMANSHIP].main = function(self)
 	if TimeInCombat() == 0 then
 		if not InArenaOrBattleground() then
-			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
+			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
 				return RepurposedFelFocuser
 			end
-			if Opt.pot and PotionOfProlongedPower:usable() then
-				UseCooldown(PotionOfProlongedPower)
+			if Opt.pot and BattlePotionOfAgility:usable() then
+				UseCooldown(BattlePotionOfAgility)
 			end
 		end
 	end
 	if not InArenaOrBattleground() then
-		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
+		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
 			UseCooldown(RepurposedFelFocuser)
 		end
 	end
@@ -1047,11 +1049,11 @@ APL[SPEC.SURVIVAL].main = function(self)
 	end
 	if TimeInCombat() == 0 then
 		if not InArenaOrBattleground() then
-			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not FlaskOfTheSeventhDemon.buff:up() then
+			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
 				return RepurposedFelFocuser
 			end
-			if Opt.pot and PotionOfProlongedPower:usable() then
-				UseCooldown(PotionOfProlongedPower)
+			if Opt.pot and BattlePotionOfAgility:usable() then
+				UseCooldown(BattlePotionOfAgility)
 			end
 		end
 		if Harpoon:usable() then
@@ -1059,11 +1061,11 @@ APL[SPEC.SURVIVAL].main = function(self)
 		end
 	end
 	if not InArenaOrBattleground() then
-		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not FlaskOfTheSeventhDemon.buff:up() then
+		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
 			UseCooldown(RepurposedFelFocuser)
 		end
-		if Opt.pot and PotionOfProlongedPower:usable() and CoordinatedAssault:up() and BloodlustActive() then
-			UseCooldown(PotionOfProlongedPower)
+		if Opt.pot and BattlePotionOfAgility:usable() and CoordinatedAssault:up() and BloodlustActive() then
+			UseCooldown(BattlePotionOfAgility)
 		end
 	end
 --[[
@@ -2011,7 +2013,7 @@ function SlashCmdList.GoodHunting(msg, editbox)
 		if msg[2] then
 			Opt.pot = msg[2] == 'on'
 		end
-		return print('Good Hunting - Show Prolonged Power potions in cooldown UI: ' .. (Opt.pot and '|cFF00C000On' or '|cFFC00000Off'))
+		return print('Good Hunting - Show Battle potions in cooldown UI: ' .. (Opt.pot and '|cFF00C000On' or '|cFFC00000Off'))
 	end
 	if startsWith(msg[1], 'mend') then
 		if msg[2] then
@@ -2047,7 +2049,7 @@ function SlashCmdList.GoodHunting(msg, editbox)
 		'interrupt |cFF00C000on|r/|cFFC00000off|r - show an icon for interruptable spells',
 		'auto |cFF00C000on|r/|cFFC00000off|r  - automatically change target mode on AoE spells',
 		'ttl |cFFFFD000[seconds]|r  - time target exists in auto AoE after being hit (default is 10 seconds)',
-		'pot |cFF00C000on|r/|cFFC00000off|r - show Prolonged Power potions in cooldown UI',
+		'pot |cFF00C000on|r/|cFFC00000off|r - show Battle potions in cooldown UI',
 		'mend |cFFFFD000[percent]|r  - health percentage to recommend Mend Pet at (default is 65%, 0 to disable)',
 		'|cFFFFD000reset|r - reset the location of the Good Hunting UI to default',
 	} do
