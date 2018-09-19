@@ -1726,6 +1726,12 @@ function events:PLAYER_SPECIALIZATION_CHANGED(unitName)
 			abilities[i].name, _, abilities[i].icon = GetSpellInfo(abilities[i].spellId)
 			abilities[i].known = IsPlayerSpell(abilities[i].spellId) or (abilities[i].spellId2 and IsPlayerSpell(abilities[i].spellId2))
 		end
+		if Butchery.known then
+			Carve.known = false
+		end
+		if MongooseBite.known then
+			RaptorStrike.known = false
+		end
 		for i = 1, #inventoryItems do
 			inventoryItems[i].name, _, _, _, _, _, _, _, _, inventoryItems[i].icon = GetItemInfo(inventoryItems[i].itemId)
 		end
