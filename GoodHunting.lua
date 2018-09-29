@@ -107,6 +107,9 @@ local ItemEquipped = {
 
 }
 
+-- Azerite trait API access
+local Azerite = {}
+
 local var = {
 	gcd = 1.5
 }
@@ -491,6 +494,10 @@ function Ability:castRegen()
 	return var.focus_regen * self:castTime() - self:cost()
 end
 
+function Ability:wontCapFocus(reduction)
+	return (var.focus + self:castRegen()) < (var.focus_max - (reduction or 5))
+end
+
 function Ability:tickTime()
 	return self.hasted_ticks and (var.haste_factor * self.tick_interval) or self.tick_interval
 end
@@ -500,6 +507,10 @@ function Ability:previous()
 		return true
 	end
 	return PreviousGCD[1] == self or var.last_ability == self
+end
+
+function Ability:azeriteRank()
+	return Azerite.traits[self.spellId] or 0
 end
 
 function Ability:setAutoAoe(enabled)
@@ -741,8 +752,18 @@ VolatileBomb:setAutoAoe(true)
 local WildfireInfusion = Ability.add(271014, false, true)
 ------ Procs
 
+-- Azerite Traits
+local BlurOfTalons = Ability.add(277653, true, true, 277969)
+BlurOfTalons.buff_duration = 6
+local LatentPoison = Ability.add(273283, true, true, 273284)
+LatentPoison.buff_duration = 10
+local UpCloseAndPersonal = Ability.add(278533, true, true, 279593)
+UpCloseAndPersonal.buff_duration = 6
+local VenomousFangs = Ability.add(274590, false, true)
 -- Racials
-
+local ArcaneTorrent = Ability.add(80483, true, false) -- Blood Elf
+ArcaneTorrent.focus_cost = -15
+ArcaneTorrent.triggers_gcd = false
 -- Trinket Effects
 
 -- End Abilities
@@ -807,6 +828,46 @@ BattlePotionOfAgility.buff.triggers_gcd = false
 local RepurposedFelFocuser = InventoryItem.add(147707)
 RepurposedFelFocuser.buff = Ability.add(242551, true, true)
 -- End Inventory Items
+
+-- Start Azerite Trait API
+
+Azerite.equip_slots = { 1, 3, 5 } -- Head, Shoulder, Chest
+
+function Azerite:initialize()
+	self.locations = {}
+	self.traits = {}
+	local i
+	for i = 1, #self.equip_slots do
+		self.locations[i] = ItemLocation:CreateFromEquipmentSlot(self.equip_slots[i])
+	end
+end
+
+function Azerite:update()
+	local _, loc, tinfo, tslot, pid, pinfo
+	for pid in next, self.traits do
+		self.traits[pid] = nil
+	end
+	for _, loc in next, self.locations do
+		if GetInventoryItemID('player', loc:GetEquipmentSlot()) and C_AzeriteEmpoweredItem.IsAzeriteEmpoweredItem(loc) then
+			tinfo = C_AzeriteEmpoweredItem.GetAllTierInfo(loc)
+			for _, tslot in next, tinfo do
+				if tslot.azeritePowerIDs then
+					for _, pid in next, tslot.azeritePowerIDs do
+						if C_AzeriteEmpoweredItem.IsPowerSelected(loc, pid) then
+							self.traits[pid] = 1 + (self.traits[pid] or 0)
+							pinfo = C_AzeriteEmpoweredItem.GetPowerInfo(pid)
+							if pinfo and pinfo.spellID then
+								self.traits[pinfo.spellID] = self.traits[pid]
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+-- End Azerite Trait API
 
 -- Start Helpful Functions
 
@@ -1064,86 +1125,329 @@ APL[SPEC.SURVIVAL].main = function(self)
 		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
 			UseCooldown(RepurposedFelFocuser)
 		end
-		if Opt.pot and BattlePotionOfAgility:usable() and CoordinatedAssault:up() and BloodlustActive() then
-			UseCooldown(BattlePotionOfAgility)
-		end
 	end
 --[[
-actions=auto_attack
-actions+=/use_items
-actions+=/berserking,if=cooldown.coordinated_assault.remains>30
-actions+=/blood_fury,if=cooldown.coordinated_assault.remains>30
-actions+=/ancestral_call,if=cooldown.coordinated_assault.remains>30
-actions+=/fireblood,if=cooldown.coordinated_assault.remains>30
-actions+=/lights_judgment
-actions+=/potion,if=buff.coordinated_assault.up&(buff.berserking.up|buff.blood_fury.up|!race.troll&!race.orc)
-actions+=/variable,name=can_gcd,value=!talent.mongoose_bite.enabled|buff.mongoose_fury.down|(buff.mongoose_fury.remains-(((buff.mongoose_fury.remains*focus.regen+focus)%action.mongoose_bite.cost)*gcd.max)>gcd.max)
-actions+=/steel_trap
-actions+=/a_murder_of_crows
-actions+=/coordinated_assault
-actions+=/chakrams,if=active_enemies>1
-actions+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&buff.tip_of_the_spear.stack<3&active_enemies<2
-actions+=/wildfire_bomb,if=(focus+cast_regen<focus.max|active_enemies>1)&(dot.wildfire_bomb.refreshable&buff.mongoose_fury.down|full_recharge_time<gcd)
-actions+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&buff.tip_of_the_spear.stack<3
-actions+=/butchery,if=(!talent.wildfire_infusion.enabled|full_recharge_time<gcd)&active_enemies>3|(dot.shrapnel_bomb.ticking&dot.internal_bleeding.stack<3)
-actions+=/serpent_sting,if=(active_enemies<2&refreshable&(buff.mongoose_fury.down|(variable.can_gcd&!talent.vipers_venom.enabled)))|buff.vipers_venom.up
-actions+=/carve,if=active_enemies>2&(active_enemies<6&active_enemies+gcd<cooldown.wildfire_bomb.remains|5+gcd<cooldown.wildfire_bomb.remains)
-actions+=/harpoon,if=talent.terms_of_engagement.enabled
-actions+=/flanking_strike
-actions+=/chakrams
-actions+=/serpent_sting,target_if=min:remains,if=refreshable&buff.mongoose_fury.down|buff.vipers_venom.up
-actions+=/mongoose_bite,target_if=min:dot.internal_bleeding.stack,if=buff.mongoose_fury.up|focus>60
-actions+=/butchery
-actions+=/raptor_strike,target_if=min:dot.internal_bleeding.stack
+actions+=/call_action_list,name=cds
+actions+=/run_action_list,name=mb_ap_wfi_st,if=active_enemies<2&talent.wildfire_infusion.enabled&talent.alpha_predator.enabled&talent.mongoose_bite.enabled
+actions+=/run_action_list,name=wfi_st,if=active_enemies<2&talent.wildfire_infusion.enabled
+actions+=/run_action_list,name=st,if=active_enemies<2
+actions+=/run_action_list,name=cleave
+actions+=/arcane_torrent
 ]]
-	var.can_gcd = not MongooseBite.known or MongooseFury:down() or ((MongooseFury:remains() - (((MongooseFury:remains() * FocusRegen() + Focus()) % MongooseBite:cost()) * GCD())) > GCD())
-	if SteelTrap:usable() then
-		UseCooldown(SteelTrap)
+	local apl
+	apl = self:cds()
+	if Enemies() < 2 then
+		if WildfireInfusion.known then
+			if AlphaPredator.known and MongooseBite.known then
+				apl = self:mb_ap_wfi_st()
+			else
+				apl = self:wfi_st()
+			end
+		else
+			apl = self:st()
+		end
+	else
+		apl = self:cleave()
 	end
+	if ArcaneTorrent:usable() and Focus() < 30 then
+		UseCooldown(ArcaneTorrent)
+	end
+	return apl
+end
+
+APL[SPEC.SURVIVAL].cds = function(self)
+--[[
+actions.cds=blood_fury,if=cooldown.coordinated_assault.remains>30
+actions.cds+=/ancestral_call,if=cooldown.coordinated_assault.remains>30
+actions.cds+=/fireblood,if=cooldown.coordinated_assault.remains>30
+actions.cds+=/lights_judgment
+actions.cds+=/berserking,if=cooldown.coordinated_assault.remains>60|time_to_die<11
+actions.cds+=/potion,if=buff.coordinated_assault.up&(buff.berserking.up|buff.blood_fury.up|!race.troll&!race.orc)|time_to_die<26
+actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
+]]
+	if Opt.pot and not InArenaOrBattleground() and BattlePotionOfAgility:usable() and CoordinatedAssault:up() and BloodlustActive() then
+		UseCooldown(BattlePotionOfAgility)
+	end
+end
+
+APL[SPEC.SURVIVAL].st = function(self)
+--[[
+actions.st=a_murder_of_crows
+actions.st+=/coordinated_assault
+actions.st+=/wildfire_bomb,if=full_recharge_time<gcd&talent.alpha_predator.enabled
+actions.st+=/serpent_sting,if=refreshable&buff.mongoose_fury.stack=5&talent.alpha_predator.enabled
+# To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
+actions.st+=/mongoose_bite,if=buff.mongoose_fury.stack=5&talent.alpha_predator.enabled
+actions.st+=/raptor_strike,if=talent.birds_of_prey.enabled&buff.coordinated_assault.up&(buff.coordinated_assault.remains<gcd|buff.blur_of_talons.up&buff.blur_of_talons.remains<gcd)
+actions.st+=/mongoose_bite,if=talent.birds_of_prey.enabled&buff.coordinated_assault.up&(buff.coordinated_assault.remains<gcd|buff.blur_of_talons.up&buff.blur_of_talons.remains<gcd)
+actions.st+=/kill_command,if=focus+cast_regen<focus.max&buff.tip_of_the_spear.stack<3
+actions.st+=/chakrams
+actions.st+=/steel_trap
+actions.st+=/wildfire_bomb,if=focus+cast_regen<focus.max&(full_recharge_time<gcd|dot.wildfire_bomb.refreshable&buff.mongoose_fury.down)
+actions.st+=/harpoon,if=talent.terms_of_engagement.enabled|azerite.up_close_and_personal.enabled
+actions.st+=/flanking_strike,if=focus+cast_regen<focus.max
+actions.st+=/serpent_sting,if=buff.vipers_venom.up|refreshable&(!talent.mongoose_bite.enabled|!talent.vipers_venom.enabled|azerite.latent_poison.enabled|azerite.venomous_fangs.enabled)
+actions.st+=/mongoose_bite,if=buff.mongoose_fury.up|focus>60
+actions.st+=/raptor_strike
+actions.st+=/wildfire_bomb,if=dot.wildfire_bomb.refreshable
+actions.st+=/serpent_sting,if=refreshable
+]]
 	if AMurderOfCrows:usable() then
 		UseCooldown(AMurderOfCrows)
 	end
 	if CoordinatedAssault:usable() then
 		UseCooldown(CoordinatedAssault)
 	end
-	if Chakrams:usable() and Enemies() > 1 then
-		return Chakrams
+	if AlphaPredator.known then
+		if WildfireBomb:usable() and WildfireBomb:fullRechargeTime() < GCD() then
+			return WildfireBomb
+		end
+		if MongooseBite.known and MongooseFury:remains() > 0.2 and MongooseFury:stack() == 5 then
+			if SerpentSting:usable() and SerpentSting:refreshable() then
+				return SerpentSting
+			end
+			if MongooseBite:usable() then
+				return MongooseBite
+			end
+		end
 	end
-	if KillCommand:usable() and (Focus() + KillCommand:castRegen()) < (FocusMax() - 5) and TipOfTheSpear:stack() < 3 and Enemies() < 2 then
+	if BirdsOfPrey.known and CoordinatedAssault:up() and (CoordinatedAssault:remains() < GCD() or BlurOfTalons:up() and BlurOfTalons:remains() < GCD()) then
+		if MongooseBite:usable() then
+			return MongooseBite
+		end
+		if RaptorStrike:usable() then
+			return RaptorStrike
+		end
+	end
+	if KillCommand:usable() and KillCommand:wontCapFocus() and TipOfTheSpear:stack() < 3 then
 		return KillCommand
-	end
-	if WildfireBomb:usable() and ((Focus() + WildfireBomb:castRegen()) < (FocusMax() - 5) or Enemies() > 1) and (WildfireBomb:refreshable() and MongooseFury:down() or WildfireBomb:fullRechargeTime() < GCD()) then
-		return WildfireBomb
-	end
-	if KillCommand:usable() and (Focus() + KillCommand:castRegen()) < (FocusMax() - 5) and TipOfTheSpear:stack() < 3 then
-		return KillCommand
-	end
-	if Butchery:usable() and ((not WildfireInfusion.known or Butchery:fullRechargeTime() < GCD()) and Enemies() > 3 or (WildfireInfusion.known and ShrapnelBomb:up() and InternalBleeding:stack() < 3)) then
-		return Butchery
-	end
-	if SerpentSting:usable() and ((Enemies() < 2 and SerpentSting:refreshable() and (MongooseFury:down() or (var.can_gcd and not VipersVenom.known))) or (VipersVenom.known and VipersVenom:up())) then
-		return SerpentSting
-	end
-	if Carve:usable() and Enemies() > 2 and (Enemies() < 6 and (Enemies() + GCD()) < WildfireBomb:cooldown() or (5 + GCD()) < WildfireBomb:cooldown()) then
-		return Carve
-	end
-	if TermsOfEngagement.known and Harpoon:usable() then
-		UseCooldown(Harpoon)
-	end
-	if FlankingStrike:usable() then
-		return FlankingStrike
 	end
 	if Chakrams:usable() then
 		return Chakrams
 	end
-	if SerpentSting:usable() and ((SerpentSting:refreshable() and MongooseFury:down()) or (VipersVenom.known and VipersVenom:up())) then
+	if SteelTrap:usable() then
+		UseCooldown(SteelTrap)
+	end
+	if WildfireBomb:usable() and WildfireBomb:wontCapFocus() and (WildfireBomb:fullRechargeTime() < GCD() or WildfireBomb:refreshable() and MongooseFury:down()) then
+		return WildfireBomb
+	end
+	if (TermsOfEngagement.known or UpCloseAndPersonal.known) and Harpoon:usable() then
+		UseCooldown(Harpoon)
+	end
+	if FlankingStrike:usable() and FlankingStrike:wontCapFocus() then
+		return FlankingStrike
+	end
+	if SerpentSting:usable() and ((VipersVenom.known and VipersVenom:up()) or (SerpentSting:refreshable() and (not MongooseBite.known or not VipersVenom.known or LatentPoison.known or VenomousFangs.known))) then
 		return SerpentSting
 	end
-	if MongooseBite:usable() and (MongooseFury:up() or Focus() > 60) then
+	if MongooseBite:usable() and (MongooseFury:remains() > 0.2 or Focus() > 60) then
 		return MongooseBite
 	end
-	if Butchery:usable() then
+	if RaptorStrike:usable() then
+		return RaptorStrike
+	end
+	if WildfireBomb:usable() and WildfireBomb:refreshable() then
+		return WildfireBomb
+	end
+	if SerpentSting:usable() and SerpentSting:refreshable() then
+		return SerpentSting
+	end
+end
+
+APL[SPEC.SURVIVAL].wfi_st = function(self)
+--[[
+actions.wfi_st=a_murder_of_crows
+actions.wfi_st+=/coordinated_assault
+# To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
+actions.wfi_st+=/mongoose_bite,if=azerite.wilderness_survival.enabled&next_wi_bomb.volatile&dot.serpent_sting.remains>2.1*gcd&dot.serpent_sting.remains<3.5*gcd&cooldown.wildfire_bomb.remains>2.5*gcd
+actions.wfi_st+=/wildfire_bomb,if=full_recharge_time<gcd|(focus+cast_regen<focus.max)&(next_wi_bomb.volatile&dot.serpent_sting.ticking&dot.serpent_sting.refreshable|next_wi_bomb.pheromone&!buff.mongoose_fury.up&focus+cast_regen<focus.max-action.kill_command.cast_regen*3)
+actions.wfi_st+=/kill_command,if=focus+cast_regen<focus.max&buff.tip_of_the_spear.stack<3&(!talent.alpha_predator.enabled|buff.mongoose_fury.stack<5|focus<action.mongoose_bite.cost)
+actions.wfi_st+=/raptor_strike,if=dot.internal_bleeding.stack<3&dot.shrapnel_bomb.ticking&!talent.mongoose_bite.enabled
+actions.wfi_st+=/wildfire_bomb,if=next_wi_bomb.shrapnel&buff.mongoose_fury.down&(cooldown.kill_command.remains>gcd|focus>60)&!dot.serpent_sting.refreshable
+actions.wfi_st+=/steel_trap
+actions.wfi_st+=/flanking_strike,if=focus+cast_regen<focus.max
+actions.wfi_st+=/serpent_sting,if=buff.vipers_venom.up|refreshable&(!talent.mongoose_bite.enabled|!talent.vipers_venom.enabled|next_wi_bomb.volatile&!dot.shrapnel_bomb.ticking|azerite.latent_poison.enabled|azerite.venomous_fangs.enabled|buff.mongoose_fury.stack=5)
+actions.wfi_st+=/harpoon,if=talent.terms_of_engagement.enabled|azerite.up_close_and_personal.enabled
+actions.wfi_st+=/mongoose_bite,if=buff.mongoose_fury.up|focus>60|dot.shrapnel_bomb.ticking
+actions.wfi_st+=/raptor_strike
+actions.wfi_st+=/serpent_sting,if=refreshable
+actions.wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|next_wi_bomb.pheromone|next_wi_bomb.shrapnel&focus>50
+]]
+	if AMurderOfCrows:usable() then
+		UseCooldown(AMurderOfCrows)
+	end
+	if CoordinatedAssault:usable() then
+		UseCooldown(CoordinatedAssault)
+	end
+	if MongooseBite:usable() and WildernessSurvival.known and VolatileBomb.known and SerpentSting:remains() > 2.1 * GCD() and SerpentSting:remains() < 3.5 * GCD() and WildfireBomb:cooldown() > 2.5 * GCD() then
+		return MongooseBite
+	end
+	if WildfireBomb:usable() and (WildfireBomb:fullRechargeTime() < GCD() or (WildfireBomb:wontCapFocus() and ((VolatileBomb.known and SerpentSting:up() and SerpentSting:refreshable()) or (PheromoneBomb.known and not MongooseFury:up() and WildfireBomb:wontCapFocus(KillCommand:castRegen() * 3))))) then
+		return WildfireBomb
+	end
+	if KillCommand:usable() and KillCommand:wontCapFocus() and TipOfTheSpear:stack() < 3 and (not AlphaPredator.known or MongooseFury:stack() < 5 or Focus() < MongooseBite:cost()) then
+		return KillCommand
+	end
+	if RaptorStrike:usable() and InternalBleeding:stack() < 3 and ShrapnelBomb:up() then
+		return RaptorStrike
+	end
+	if WildfireBomb:usable() and ShrapnelBomb.known and MongooseFury:down() and (KillCommand:cooldown() > GCD() or Focus() > 60) and not SerpentSting:refreshable() then
+		return WildfireBomb
+	end
+	if SteelTrap:usable() then
+		UseCooldown(SteelTrap)
+	end
+	if FlankingStrike:usable() and FlankingStrike:wontCapFocus() then
+		return FlankingStrike
+	end
+	if SerpentSting:usable() and ((VipersVenom.known and VipersVenom:up()) or (SerpentSting:refreshable() and (not MongooseBite.known or not VipersVenom.known or VolatileBomb.known and not ShrapnelBomb:up() or LatentPoison.known or VenomousFangs.known or MongooseFury:stack() == 5))) then
+		return SerpentSting
+	end
+	if (TermsOfEngagement.known or UpCloseAndPersonal.known) and Harpoon:usable() then
+		UseCooldown(Harpoon)
+	end
+	if MongooseBite:usable() and (MongooseFury:remains() > 0.2 or Focus() > 60 or ShrapnelBomb:up()) then
+		return MongooseBite
+	end
+	if RaptorStrike:usable() then
+		return RaptorStrike
+	end
+	if SerpentSting:usable() and SerpentSting:refreshable() then
+		return SerpentSting
+	end
+	if WildfireBomb:usable() and ((VolatileBomb.known and SerpentSting:up()) or PheromoneBomb.known or (ShrapnelBomb.known and Focus() > 50)) then
+		return WildfireBomb
+	end
+end
+
+APL[SPEC.SURVIVAL].mb_ap_wfi_st = function(self)
+--[[
+actions.mb_ap_wfi_st=serpent_sting,if=!dot.serpent_sting.ticking
+actions.mb_ap_wfi_st+=/wildfire_bomb,if=full_recharge_time<gcd|(focus+cast_regen<focus.max)&(next_wi_bomb.volatile&dot.serpent_sting.ticking&dot.serpent_sting.refreshable|next_wi_bomb.pheromone&!buff.mongoose_fury.up&focus+cast_regen<focus.max-action.kill_command.cast_regen*3)
+actions.mb_ap_wfi_st+=/coordinated_assault
+actions.mb_ap_wfi_st+=/a_murder_of_crows
+actions.mb_ap_wfi_st+=/steel_trap
+# To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
+actions.mb_ap_wfi_st+=/mongoose_bite,if=buff.mongoose_fury.remains&next_wi_bomb.pheromone
+actions.mb_ap_wfi_st+=/kill_command,if=focus+cast_regen<focus.max&(buff.mongoose_fury.stack<5|focus<action.mongoose_bite.cost)
+actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.shrapnel&focus>60&dot.serpent_sting.remains>3*gcd
+actions.mb_ap_wfi_st+=/serpent_sting,if=buff.vipers_venom.up|refreshable&(!talent.mongoose_bite.enabled|!talent.vipers_venom.enabled|next_wi_bomb.volatile&!dot.shrapnel_bomb.ticking|azerite.latent_poison.enabled|azerite.venomous_fangs.enabled)
+actions.mb_ap_wfi_st+=/mongoose_bite,if=buff.mongoose_fury.up|focus>60|dot.shrapnel_bomb.ticking
+actions.mb_ap_wfi_st+=/serpent_sting,if=refreshable
+actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|next_wi_bomb.pheromone|next_wi_bomb.shrapnel&focus>50
+]]
+	if SerpentSting:usable() and SerpentSting:down() then
+		return SerpentSting
+	end
+	if WildfireBomb:usable() and (WildfireBomb:fullRechargeTime() < GCD() or (WildfireBomb:wontCapFocus() and ((VolatileBomb.known and SerpentSting:up() and SerpentSting:refreshable()) or (PheromoneBomb.known and not MongooseFury:up() and WildfireBomb:wontCapFocus(KillCommand:castRegen() * 3))))) then
+		return WildfireBomb
+	end
+	if CoordinatedAssault:usable() then
+		UseCooldown(CoordinatedAssault)
+	end
+	if AMurderOfCrows:usable() then
+		UseCooldown(AMurderOfCrows)
+	end
+	if SteelTrap:usable() then
+		UseCooldown(SteelTrap)
+	end
+	if MongooseBite:usable() and MongooseFury:remains() > 0.2 and PheromoneBomb.known then
+		return MongooseBite
+	end
+	if KillCommand:usable() and KillCommand:wontCapFocus() and (MongooseFury:stack() < 5 or Focus() < MongooseBite:cost()) then
+		return KillCommand
+	end
+	if WildfireBomb:usable() and ShrapnelBomb.known and Focus() > 60 and SerpentSting:remains() > 3 * GCD() then
+		return WildfireBomb
+	end
+	if SerpentSting:usable() and SerpentSting:refreshable() and (VolatileBomb.known and not ShrapnelBomb:up() or LatentPoison.known or VenomousFangs.known) then
+		return SerpentSting
+	end
+	if MongooseBite:usable() and (MongooseFury:remains() > 0.2 or Focus() > 60 or ShrapnelBomb:up()) then
+		return MongooseBite
+	end
+	if SerpentSting:usable() and SerpentSting:refreshable() then
+		return SerpentSting
+	end
+	if WildfireBomb:usable() and ((VolatileBomb.known and SerpentSting:up()) or PheromoneBomb.known or (ShrapnelBomb.known and Focus() > 50)) then
+		return WildfireBomb
+	end
+end
+
+APL[SPEC.SURVIVAL].cleave = function(self)
+--[[
+actions.cleave=variable,name=carve_cdr,op=setif,value=active_enemies,value_else=5,condition=active_enemies<5
+actions.cleave+=/a_murder_of_crows
+actions.cleave+=/coordinated_assault
+actions.cleave+=/carve,if=dot.shrapnel_bomb.ticking
+actions.cleave+=/wildfire_bomb,if=!talent.guerrilla_tactics.enabled|full_recharge_time<gcd
+actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison.stack,if=debuff.latent_poison.stack=10
+actions.cleave+=/chakrams
+actions.cleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
+actions.cleave+=/butchery,if=full_recharge_time<gcd|!talent.wildfire_infusion.enabled|dot.shrapnel_bomb.ticking&dot.internal_bleeding.stack<3
+actions.cleave+=/carve,if=talent.guerrilla_tactics.enabled
+actions.cleave+=/flanking_strike,if=focus+cast_regen<focus.max
+actions.cleave+=/wildfire_bomb,if=dot.wildfire_bomb.refreshable|talent.wildfire_infusion.enabled
+actions.cleave+=/serpent_sting,target_if=min:remains,if=buff.vipers_venom.up
+actions.cleave+=/carve,if=cooldown.wildfire_bomb.remains>variable.carve_cdr%2
+actions.cleave+=/steel_trap
+actions.cleave+=/harpoon,if=talent.terms_of_engagement.enabled
+actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&buff.tip_of_the_spear.stack<3
+# To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
+actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison.stack
+actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
+]]
+	local carve_cdr = min(Enemies(), 5)
+	if AMurderOfCrows:usable() then
+		UseCooldown(AMurderOfCrows)
+	end
+	if CoordinatedAssault:usable() then
+		UseCooldown(CoordinatedAssault)
+	end
+	if Carve:usable() and ShrapnelBomb:up() then
+		return Carve
+	end
+	if WildfireBomb:usable() and (not GuerrillaTactics.known or WildfireBomb:fullRechargeTime() < GCD()) then
+		return WildfireBomb
+	end
+	if MongooseBite:usable() and LatentPoison:stack() >= 10 then
+		return MongooseBite
+	end
+	if Chakrams:usable() then
+		return Chakrams
+	end
+	if KillCommand:usable() and KillCommand:wontCapFocus() then
+		return KillCommand
+	end
+	if Butchery:usable() and (Butchery:fullRechargeTime() < GCD() or not WildfireInfusion.known or (ShrapnelBomb:up() and InternalBleeding:stack() < 3)) then
 		return Butchery
+	end
+	if GuerrillaTactics.known and Carve:usable() then
+		return Carve
+	end
+	if FlankingStrike:usable() and FlankingStrike:wontCapFocus() then
+		return FlankingStrike
+	end
+	if WildfireBomb:usable() and (WildfireInfusion.known or WildfireBomb:refreshable()) then
+		return WildfireBomb
+	end
+	if VipersVenom.known and VipersVenom:up() and SerpentSting:usable() then
+		return SerpentSting
+	end
+	if Carve:usable() and WildfireBomb:cooldown() > (carve_cdr % 2) then
+		return Carve
+	end
+	if SteelTrap:usable() then
+		UseCooldown(SteelTrap)
+	end
+	if TermsOfEngagement.known and Harpoon:usable() then
+		UseCooldown(Harpoon)
+	end
+	if SerpentSting:usable() and SerpentSting:refreshable() and (not TipOfTheSpear.known or TipOfTheSpear:stack() < 3) then
+		return SerpentSting
+	end
+	if MongooseBite:usable() then
+		return MongooseBite
 	end
 	if RaptorStrike:usable() then
 		return RaptorStrike
@@ -1540,6 +1844,7 @@ function events:ADDON_LOADED(name)
 			print('[|cFFFFD000Warning|r] Good Hunting is not designed for players under level 110, and almost certainly will not operate properly!')
 		end
 		InitializeVariables()
+		Azerite:initialize()
 		UpdateHealthArray()
 		UpdateDraggable()
 		UpdateAlpha()
@@ -1719,19 +2024,25 @@ function events:SPELL_UPDATE_ICON()
 	end
 end
 
+local function UpdateAbilityData()
+	local _, ability
+	for _, ability in next, abilities do
+		ability.name, _, ability.icon = GetSpellInfo(ability.spellId)
+		ability.known = (IsPlayerSpell(ability.spellId) or (ability.spellId2 and IsPlayerSpell(ability.spellId2)) or Azerite.traits[ability.spellId]) and true or false
+	end
+	if Butchery.known then
+		Carve.known = false
+	end
+	if MongooseBite.known then
+		RaptorStrike.known = false
+	end
+end
+
 function events:PLAYER_SPECIALIZATION_CHANGED(unitName)
 	if unitName == 'player' then
+		Azerite:update()
+		UpdateAbilityData()
 		local _, i
-		for i = 1, #abilities do
-			abilities[i].name, _, abilities[i].icon = GetSpellInfo(abilities[i].spellId)
-			abilities[i].known = IsPlayerSpell(abilities[i].spellId) or (abilities[i].spellId2 and IsPlayerSpell(abilities[i].spellId2))
-		end
-		if Butchery.known then
-			Carve.known = false
-		end
-		if MongooseBite.known then
-			RaptorStrike.known = false
-		end
 		for i = 1, #inventoryItems do
 			inventoryItems[i].name, _, _, _, _, _, _, _, _, inventoryItems[i].icon = GetItemInfo(inventoryItems[i].itemId)
 		end
