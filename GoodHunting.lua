@@ -1322,21 +1322,21 @@ end
 
 APL[SPEC.SURVIVAL].mb_ap_wfi_st = function(self)
 --[[
-actions.mb_ap_wfi_st=serpent_sting,if=!dot.serpent_sting.ticking
+actions.mb_ap_wfi_st=serpent_sting,if=!dot.serpent_sting.ticking&buff.mongoose_fury.stack<5
 actions.mb_ap_wfi_st+=/wildfire_bomb,if=full_recharge_time<gcd|(focus+cast_regen<focus.max)&(next_wi_bomb.volatile&dot.serpent_sting.ticking&dot.serpent_sting.refreshable|next_wi_bomb.pheromone&!buff.mongoose_fury.up&focus+cast_regen<focus.max-action.kill_command.cast_regen*3)
 actions.mb_ap_wfi_st+=/coordinated_assault
+actions.mb_ap_wfi_st+=/mongoose_bite,if=buff.mongoose_fury.stack=5
 actions.mb_ap_wfi_st+=/a_murder_of_crows
 actions.mb_ap_wfi_st+=/steel_trap
 # To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
 actions.mb_ap_wfi_st+=/mongoose_bite,if=buff.mongoose_fury.remains&next_wi_bomb.pheromone
 actions.mb_ap_wfi_st+=/kill_command,if=focus+cast_regen<focus.max&(buff.mongoose_fury.stack<5|focus<action.mongoose_bite.cost)
 actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.shrapnel&focus>60&dot.serpent_sting.remains>3*gcd
-actions.mb_ap_wfi_st+=/serpent_sting,if=buff.vipers_venom.up|refreshable&(!talent.mongoose_bite.enabled|!talent.vipers_venom.enabled|next_wi_bomb.volatile&!dot.shrapnel_bomb.ticking|azerite.latent_poison.enabled|azerite.venomous_fangs.enabled)
-actions.mb_ap_wfi_st+=/mongoose_bite,if=buff.mongoose_fury.up|focus>60|dot.shrapnel_bomb.ticking
 actions.mb_ap_wfi_st+=/serpent_sting,if=refreshable
+actions.mb_ap_wfi_st+=/mongoose_bite,if=buff.mongoose_fury.up|focus>60|dot.shrapnel_bomb.ticking
 actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|next_wi_bomb.pheromone|next_wi_bomb.shrapnel&focus>50
 ]]
-	if SerpentSting:usable() and SerpentSting:down() then
+	if SerpentSting:usable() and SerpentSting:down() and MongooseFury:stack() < 5 then
 		return SerpentSting
 	end
 	if WildfireBomb:usable() and (WildfireBomb:fullRechargeTime() < GCD() or (WildfireBomb:wontCapFocus() and ((VolatileBomb.known and SerpentSting:up() and SerpentSting:refreshable()) or (PheromoneBomb.known and not MongooseFury:up() and WildfireBomb:wontCapFocus(KillCommand:castRegen() * 3))))) then
@@ -1344,6 +1344,9 @@ actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.
 	end
 	if CoordinatedAssault:usable() then
 		UseCooldown(CoordinatedAssault)
+	end
+	if MongooseBite:usable() and MongooseFury:remains() > 0.2 and MongooseBite:stack() == 5 then
+		return MongooseBite
 	end
 	if AMurderOfCrows:usable() then
 		UseCooldown(AMurderOfCrows)
@@ -1360,14 +1363,11 @@ actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.
 	if WildfireBomb:usable() and ShrapnelBomb.known and Focus() > 60 and SerpentSting:remains() > 3 * GCD() then
 		return WildfireBomb
 	end
-	if SerpentSting:usable() and SerpentSting:refreshable() and (VolatileBomb.known and not ShrapnelBomb:up() or LatentPoison.known or VenomousFangs.known) then
+	if SerpentSting:usable() and SerpentSting:refreshable() then
 		return SerpentSting
 	end
 	if MongooseBite:usable() and (MongooseFury:remains() > 0.2 or Focus() > 60 or ShrapnelBomb:up()) then
 		return MongooseBite
-	end
-	if SerpentSting:usable() and SerpentSting:refreshable() then
-		return SerpentSting
 	end
 	if WildfireBomb:usable() and ((VolatileBomb.known and SerpentSting:up()) or PheromoneBomb.known or (ShrapnelBomb.known and Focus() > 50)) then
 		return WildfireBomb
