@@ -3,6 +3,14 @@ if select(2, UnitClass('player')) ~= 'HUNTER' then
 	return
 end
 
+-- copy heavily accessed global functions into local scope for performance
+local GetSpellCooldown = _G.GetSpellCooldown
+local GetSpellCharges = _G.GetSpellCharges
+local GetTime = _G.GetTime
+local UnitCastingInfo = _G.UnitCastingInfo
+local UnitAura = _G.UnitAura
+-- end copy global functions
+
 -- useful functions
 local function startsWith(str, start) -- case insensitive check to see if a string matches the start of another string
 	if type(str) ~= 'string' then
@@ -114,30 +122,6 @@ local var = {
 	gcd = 1.5
 }
 
-local targetModes = {
-	[SPEC.NONE] = {
-		{1, ''}
-	},
-	[SPEC.BEASTMASTERY] = {
-		{1, ''},
-		{2, '2'},
-		{3, '3'},
-		{4, '4+'}
-	},
-	[SPEC.MARKSMANSHIP] = {
-		{1, ''},
-		{2, '2'},
-		{3, '3'},
-		{4, '4+'}
-	},
-	[SPEC.SURVIVAL] = {
-		{1, ''},
-		{2, '2'},
-		{3, '3'},
-		{4, '4+'}
-	}
-}
-
 local ghPanel = CreateFrame('Frame', 'ghPanel', UIParent)
 ghPanel:SetPoint('CENTER', 0, -169)
 ghPanel:SetFrameStrata('BACKGROUND')
@@ -232,6 +216,49 @@ ghExtraPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
 
 -- Start Auto AoE
 
+local targetModes = {
+	[SPEC.NONE] = {
+		{1, ''}
+	},
+	[SPEC.BEASTMASTERY] = {
+		{1, ''},
+		{2, '2'},
+		{3, '3'},
+		{4, '4+'}
+	},
+	[SPEC.MARKSMANSHIP] = {
+		{1, ''},
+		{2, '2'},
+		{3, '3'},
+		{4, '4+'}
+	},
+	[SPEC.SURVIVAL] = {
+		{1, ''},
+		{2, '2'},
+		{3, '3'},
+		{4, '4+'}
+	}
+}
+
+local function SetTargetMode(mode)
+	targetMode = min(mode, #targetModes[currentSpec])
+	ghPanel.targets:SetText(targetModes[currentSpec][targetMode][2])
+end
+GoodHunting_SetTargetMode = SetTargetMode
+
+function ToggleTargetMode()
+	local mode = targetMode + 1
+	SetTargetMode(mode > #targetModes[currentSpec] and 1 or mode)
+end
+GoodHunting_ToggleTargetMode = ToggleTargetMode
+
+local function ToggleTargetModeReverse()
+	local mode = targetMode - 1
+	SetTargetMode(mode < 1 and #targetModes[currentSpec] or mode)
+end
+GoodHunting_ToggleTargetModeReverse = ToggleTargetModeReverse
+
+
 local autoAoe = {
 	abilities = {},
 	targets = {}
@@ -243,12 +270,12 @@ function autoAoe:update()
 		count = count + 1
 	end
 	if count <= 1 then
-		GoodHunting_SetTargetMode(1)
+		SetTargetMode(1)
 		return
 	end
 	for i = #targetModes[currentSpec], 1, -1 do
 		if count >= targetModes[currentSpec][i][1] then
-			GoodHunting_SetTargetMode(i)
+			SetTargetMode(i)
 			return
 		end
 	end
@@ -476,6 +503,10 @@ end
 
 function Ability:duration()
 	return self.hasted_duration and (var.haste_factor * self.buff_duration) or self.buff_duration
+end
+
+function Ability:casting()
+	return var.ability_casting == self
 end
 
 function Ability:channeling()
@@ -818,15 +849,11 @@ function InventoryItem:usable(seconds)
 end
 
 -- Inventory Items
-local FlaskOfTheSeventhDemon = InventoryItem.add(127848)
-FlaskOfTheSeventhDemon.buff = Ability.add(188033, true, true)
 local FlaskOfTheCurrents = InventoryItem.add(152638)
 FlaskOfTheCurrents.buff = Ability.add(251836, true, true)
 local BattlePotionOfAgility = InventoryItem.add(163223)
 BattlePotionOfAgility.buff = Ability.add(279152, true, true)
 BattlePotionOfAgility.buff.triggers_gcd = false
-local RepurposedFelFocuser = InventoryItem.add(147707)
-RepurposedFelFocuser.buff = Ability.add(242551, true, true)
 -- End Inventory Items
 
 -- Start Azerite Trait API
@@ -904,7 +931,13 @@ local function Enemies()
 end
 
 local function TimeInCombat()
-	return combatStartTime > 0 and var.time - combatStartTime or 0
+	if combatStartTime > 0 then
+		return var.time - combatStartTime
+	end
+	if var.ability_casting then
+		return 0.1
+	end
+	return 0
 end
 
 local function BloodlustActive()
@@ -1013,7 +1046,7 @@ end
 -- End Ability Modifications
 
 local function UpdateVars()
-	local _, start, duration, remains, hp, hp_lost, spellId
+	local _, start, duration, remains, spellId
 	var.last_main = var.main
 	var.last_cd = var.cd
 	var.last_extra = var.extra
@@ -1024,21 +1057,25 @@ local function UpdateVars()
 	start, duration = GetSpellCooldown(61304)
 	var.gcd_remains = start > 0 and duration - (var.time - start) or 0
 	_, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
+	var.ability_casting = abilityBySpellId[spellId]
 	var.execute_remains = max(remains and (remains / 1000 - var.time) or 0, var.gcd_remains)
 	var.haste_factor = 1 / (1 + UnitSpellHaste('player') / 100)
 	var.gcd = 1.5 * var.haste_factor
 	var.focus_regen = GetPowerRegen()
-	var.focus_max = UnitPowerMax('player', 2)
-	var.focus = min(var.focus_max, floor(UnitPower('player', 2) + (var.focus_regen * var.execute_remains)))
+	var.focus = UnitPower('player', 2) + (var.focus_regen * var.execute_remains)
+	if var.ability_casting then
+		var.focus = var.focus - var.ability_casting:cost()
+	end
+	var.focus = min(max(var.focus, 0), var.focus_max)
 	var.pet = UnitGUID('pet')
 	var.pet_exists = UnitExists('pet') and not UnitIsDead('pet')
-	hp = UnitHealth('target')
+	Target.health = UnitHealth('target')
 	table.remove(Target.healthArray, 1)
-	Target.healthArray[#Target.healthArray + 1] = hp
-	Target.timeToDieMax = hp / UnitHealthMax('player') * 5
-	Target.healthPercentage = Target.guid == 0 and 100 or (hp / UnitHealthMax('target') * 100)
-	hp_lost = Target.healthArray[1] - hp
-	Target.timeToDie = hp_lost > 0 and min(Target.timeToDieMax, hp / (hp_lost / 3)) or Target.timeToDieMax
+	Target.healthArray[#Target.healthArray + 1] = Target.health
+	Target.timeToDieMax = Target.health / UnitHealthMax('player') * 5
+	Target.healthPercentage = Target.healthMax > 0 and (Target.health / Target.healthMax * 100) or 100
+	Target.healthLostPerSec = (Target.healthArray[1] - Target.health) / 3
+	Target.timeToDie = Target.healthLostPerSec > 0 and min(Target.timeToDieMax, (Target.health - (Target.healthLostPerSec * var.execute_remains) / Target.healthLostPerSec)) or Target.timeToDieMax
 end
 
 local function UseCooldown(ability, overwrite, always)
@@ -1067,17 +1104,9 @@ local APL = {
 APL[SPEC.BEASTMASTERY].main = function(self)
 	if TimeInCombat() == 0 then
 		if not InArenaOrBattleground() then
-			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
-				return RepurposedFelFocuser
-			end
 			if Opt.pot and BattlePotionOfAgility:usable() then
 				UseCooldown(BattlePotionOfAgility)
 			end
-		end
-	end
-	if not InArenaOrBattleground() then
-		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
-			UseCooldown(RepurposedFelFocuser)
 		end
 	end
 end
@@ -1085,17 +1114,9 @@ end
 APL[SPEC.MARKSMANSHIP].main = function(self)
 	if TimeInCombat() == 0 then
 		if not InArenaOrBattleground() then
-			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
-				return RepurposedFelFocuser
-			end
 			if Opt.pot and BattlePotionOfAgility:usable() then
 				UseCooldown(BattlePotionOfAgility)
 			end
-		end
-	end
-	if not InArenaOrBattleground() then
-		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
-			UseCooldown(RepurposedFelFocuser)
 		end
 	end
 end
@@ -1110,20 +1131,12 @@ APL[SPEC.SURVIVAL].main = function(self)
 	end
 	if TimeInCombat() == 0 then
 		if not InArenaOrBattleground() then
-			if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 300 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
-				return RepurposedFelFocuser
-			end
 			if Opt.pot and BattlePotionOfAgility:usable() then
 				UseCooldown(BattlePotionOfAgility)
 			end
 		end
 		if Harpoon:usable() then
 			UseCooldown(Harpoon)
-		end
-	end
-	if not InArenaOrBattleground() then
-		if RepurposedFelFocuser:usable() and RepurposedFelFocuser.buff:remains() < 30 and not (FlaskOfTheSeventhDemon.buff:up() or FlaskOfTheCurrents.buff:up()) then
-			UseCooldown(RepurposedFelFocuser)
 		end
 	end
 --[[
@@ -1605,6 +1618,7 @@ local function Disappear()
 	ghPanel:Hide()
 	ghPanel.icon:Hide()
 	ghPanel.border:Hide()
+	ghPanel.text:Hide()
 	ghCooldownPanel:Hide()
 	ghInterruptPanel:Hide()
 	ghExtraPanel:Hide()
@@ -1613,21 +1627,6 @@ local function Disappear()
 	var.interrupt = nil
 	var.extra, var.last_extra = nil
 	UpdateGlows()
-end
-
-function GoodHunting_ToggleTargetMode()
-	local mode = targetMode + 1
-	GoodHunting_SetTargetMode(mode > #targetModes[currentSpec] and 1 or mode)
-end
-
-function GoodHunting_ToggleTargetModeReverse()
-	local mode = targetMode - 1
-	GoodHunting_SetTargetMode(mode < 1 and #targetModes[currentSpec] or mode)
-end
-
-function GoodHunting_SetTargetMode(mode)
-	targetMode = min(mode, #targetModes[currentSpec])
-	ghPanel.targets:SetText(targetModes[currentSpec][targetMode][2])
 end
 
 function Equipped(name, slot)
@@ -1695,30 +1694,30 @@ local resourceAnchor = {}
 local ResourceFramePoints = {
 	['blizzard'] = {
 		[SPEC.BEASTMASTERY] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -16 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 42 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -18 }
 		},
 		[SPEC.MARKSMANSHIP] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -16 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 42 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -18 }
 		},
 		[SPEC.SURVIVAL] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -16 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 42 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -18 }
 		}
 	},
 	['kui'] = {
 		[SPEC.BEASTMASTERY] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -16 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 30 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -4 }
 		},
 		[SPEC.MARKSMANSHIP] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -16 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 30 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -4 }
 		},
 		[SPEC.SURVIVAL] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 41 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -16 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 30 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -4 }
 		}
 	},
 }
@@ -1746,7 +1745,7 @@ local function HookResourceFrame()
 		resourceAnchor.frame = KuiNameplatesPlayerAnchor
 	else
 		resourceAnchor.name = 'blizzard'
-		resourceAnchor.frame = NamePlatePlayerResourceFrame
+		resourceAnchor.frame = ClassNameplateManaBarFrame
 	end
 	resourceAnchor.frame:HookScript("OnHide", OnResourceFrameHide)
 	resourceAnchor.frame:HookScript("OnShow", OnResourceFrameShow)
@@ -1931,6 +1930,7 @@ local function UpdateTargetInfo()
 		Target.guid = nil
 		Target.boss = false
 		Target.hostile = true
+		Target.healthMax = 0
 		local i
 		for i = 1, #Target.healthArray do
 			Target.healthArray[i] = 0
@@ -1950,6 +1950,7 @@ local function UpdateTargetInfo()
 		end
 	end
 	Target.level = UnitLevel('target')
+	Target.healthMax = UnitHealthMax('target')
 	if UnitIsPlayer('target') then
 		Target.boss = false
 	elseif Target.level == -1 then
@@ -2006,7 +2007,7 @@ function events:PLAYER_REGEN_ENABLED()
 		for guid in next, autoAoe.targets do
 			autoAoe.targets[guid] = nil
 		end
-		GoodHunting_SetTargetMode(1)
+		SetTargetMode(1)
 	end
 	if var.last_ability then
 		var.last_ability = nil
@@ -2014,17 +2015,8 @@ function events:PLAYER_REGEN_ENABLED()
 	end
 end
 
-function events:PLAYER_EQUIPMENT_CHANGED()
-
-end
-
-function events:SPELL_UPDATE_ICON()
-	if WildfireInfusion.known then
-		WildfireInfusion:update()
-	end
-end
-
 local function UpdateAbilityData()
+	var.focus_max = UnitPowerMax('player', 2)
 	local _, ability
 	for _, ability in next, abilities do
 		ability.name, _, ability.icon = GetSpellInfo(ability.spellId)
@@ -2035,6 +2027,17 @@ local function UpdateAbilityData()
 	end
 	if MongooseBite.known then
 		RaptorStrike.known = false
+	end
+end
+
+function events:PLAYER_EQUIPMENT_CHANGED()
+	Azerite:update()
+	UpdateAbilityData()
+end
+
+function events:SPELL_UPDATE_ICON()
+	if WildfireInfusion.known then
+		WildfireInfusion:update()
 	end
 end
 
@@ -2049,8 +2052,9 @@ function events:PLAYER_SPECIALIZATION_CHANGED(unitName)
 		ghPreviousPanel.ability = nil
 		PreviousGCD = {}
 		currentSpec = GetSpecialization() or 0
-		GoodHunting_SetTargetMode(1)
+		SetTargetMode(1)
 		UpdateTargetInfo()
+		events:PLAYER_REGEN_ENABLED()
 		events:SPELL_UPDATE_ICON()
 	end
 end
@@ -2071,11 +2075,11 @@ end
 ghPanel.button:SetScript('OnClick', function(self, button, down)
 	if down then
 		if button == 'LeftButton' then
-			GoodHunting_ToggleTargetMode()
+			ToggleTargetMode()
 		elseif button == 'RightButton' then
-			GoodHunting_ToggleTargetModeReverse()
+			ToggleTargetModeReverse()
 		elseif button == 'MiddleButton' then
-			GoodHunting_SetTargetMode(1)
+			SetTargetMode(1)
 		end
 	end
 end)
@@ -2087,7 +2091,9 @@ ghPanel:SetScript('OnUpdate', function(self, elapsed)
 		if Opt.auto_aoe then
 			local _, ability
 			for _, ability in next, autoAoe.abilities do
-				ability:updateTargetsHit()
+				if ability.known then
+					ability:updateTargetsHit()
+				end
 			end
 			autoAoe:purge()
 		end
