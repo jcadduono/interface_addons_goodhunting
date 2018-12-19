@@ -680,6 +680,7 @@ CoordinatedAssault.requires_pet = true
 local Harpoon = Ability.add(190925, false, true, 190927)
 Harpoon.cooldown_duration = 20
 Harpoon.buff_duration = 3
+Harpoon.triggers_gcd = false
 Harpoon:setVelocity(70)
 local Intimidation = Ability.add(19577, false, true)
 Intimidation.cooldown_duration = 60
