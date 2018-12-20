@@ -998,21 +998,22 @@ end
 -- hack to support Wildfire Bomb's changing spells on each cast
 function WildfireInfusion:update()
 	local _, _, _, _, _, _, spellId = GetSpellInfo(WildfireBomb.name)
-	if self.current and spellId == self.current.spellId then
-		return -- not a bomb change
+	if self.current then
+		if spellId == self.current.spellId then
+			return -- not a bomb change
+		end
+		self.current.next = false
 	end
-	ShrapnelBomb.known = spellId == ShrapnelBomb.spellId
-	PheromoneBomb.known = spellId == PheromoneBomb.spellId
-	VolatileBomb.known = spellId == VolatileBomb.spellId
-	if ShrapnelBomb.known then
+	if spellId == ShrapnelBomb.spellId then
 		self.current = ShrapnelBomb
-	elseif PheromoneBomb.known then
+	elseif spellId == PheromoneBomb.spellId then
 		self.current = PheromoneBomb
-	elseif VolatileBomb.known then
+	elseif spellId == VolatileBomb.spellId then
 		self.current = VolatileBomb
 	else
 		self.current = WildfireBomb
 	end
+	self.current.next = true
 	WildfireBomb.icon = self.current.icon
 	if var.main == WildfireBomb then
 		var.main = false -- reset current ability if it was a bomb
@@ -1295,10 +1296,10 @@ actions.wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.tickin
 	if CoordinatedAssault:usable() then
 		UseCooldown(CoordinatedAssault)
 	end
-	if MongooseBite:usable() and WildernessSurvival.known and VolatileBomb.known and between(SerpentSting:remains(), 2.1 * GCD(), 3.5 * GCD()) and WildfireBomb:cooldown() > 2.5 * GCD() then
+	if MongooseBite:usable() and WildernessSurvival.known and VolatileBomb.next and between(SerpentSting:remains(), 2.1 * GCD(), 3.5 * GCD()) and WildfireBomb:cooldown() > 2.5 * GCD() then
 		return MongooseBite
 	end
-	if WildfireBomb:usable() and (WildfireBomb:fullRechargeTime() < GCD() or (WildfireBomb:wontCapFocus() and ((VolatileBomb.known and SerpentSting:up() and SerpentSting:refreshable()) or (PheromoneBomb.known and not MongooseFury:up() and WildfireBomb:wontCapFocus(KillCommand:castRegen() * 3))))) then
+	if WildfireBomb:usable() and (WildfireBomb:fullRechargeTime() < GCD() or (WildfireBomb:wontCapFocus() and ((VolatileBomb.next and SerpentSting:up() and SerpentSting:refreshable()) or (PheromoneBomb.next and not MongooseFury:up() and WildfireBomb:wontCapFocus(KillCommand:castRegen() * 3))))) then
 		return WildfireBomb
 	end
 	if KillCommand:usable() and KillCommand:wontCapFocus() and TipOfTheSpear:stack() < 3 and (not AlphaPredator.known or MongooseFury:stack() < 5 or Focus() < MongooseBite:cost()) then
@@ -1307,7 +1308,7 @@ actions.wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.tickin
 	if RaptorStrike:usable() and InternalBleeding:stack() < 3 and ShrapnelBomb:up() then
 		return RaptorStrike
 	end
-	if WildfireBomb:usable() and ShrapnelBomb.known and MongooseFury:down() and (KillCommand:cooldown() > GCD() or Focus() > 60) and not SerpentSting:refreshable() then
+	if WildfireBomb:usable() and ShrapnelBomb.next and MongooseFury:down() and (KillCommand:cooldown() > GCD() or Focus() > 60) and not SerpentSting:refreshable() then
 		return WildfireBomb
 	end
 	if SteelTrap:usable() then
@@ -1316,7 +1317,7 @@ actions.wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.tickin
 	if FlankingStrike:usable() and FlankingStrike:wontCapFocus() then
 		return FlankingStrike
 	end
-	if SerpentSting:usable() and ((VipersVenom.known and VipersVenom:up()) or (SerpentSting:refreshable() and (not MongooseBite.known or not VipersVenom.known or VolatileBomb.known and not ShrapnelBomb:up() or LatentPoison.known or VenomousFangs.known or MongooseFury:stack() == 5))) then
+	if SerpentSting:usable() and ((VipersVenom.known and VipersVenom:up()) or (SerpentSting:refreshable() and (not MongooseBite.known or not VipersVenom.known or VolatileBomb.next and not ShrapnelBomb:up() or LatentPoison.known or VenomousFangs.known or MongooseFury:stack() == 5))) then
 		return SerpentSting
 	end
 	if TermsOfEngagement.known and Harpoon:usable() then
@@ -1331,7 +1332,7 @@ actions.wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.tickin
 	if SerpentSting:usable() and SerpentSting:refreshable() then
 		return SerpentSting
 	end
-	if WildfireBomb:usable() and ((VolatileBomb.known and SerpentSting:up()) or PheromoneBomb.known or (ShrapnelBomb.known and Focus() > 50)) then
+	if WildfireBomb:usable() and ((VolatileBomb.next and SerpentSting:up()) or PheromoneBomb.next or (ShrapnelBomb.next and Focus() > 50)) then
 		return WildfireBomb
 	end
 end
@@ -1360,7 +1361,7 @@ actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.
 	if SerpentSting:usable() and SerpentSting:down() then
 		return SerpentSting
 	end
-	if WildfireBomb:usable() and (WildfireBomb:fullRechargeTime() < GCD() or (WildfireBomb:wontCapFocus() and ((VolatileBomb.known and SerpentSting:up() and SerpentSting:refreshable()) or (PheromoneBomb.known and not MongooseFury:up() and WildfireBomb:wontCapFocus(KillCommand:castRegen() * 3))))) then
+	if WildfireBomb:usable() and (WildfireBomb:fullRechargeTime() < GCD() or (WildfireBomb:wontCapFocus() and ((VolatileBomb.next and SerpentSting:up() and SerpentSting:refreshable()) or (PheromoneBomb.next and not MongooseFury:up() and WildfireBomb:wontCapFocus(KillCommand:castRegen() * 3))))) then
 		return WildfireBomb
 	end
 	if CoordinatedAssault:usable() then
@@ -1375,13 +1376,13 @@ actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.
 	if SteelTrap:usable() then
 		UseCooldown(SteelTrap)
 	end
-	if MongooseBite:usable() and MongooseFury:remains() > 0.2 and PheromoneBomb.known then
+	if MongooseBite:usable() and MongooseFury:remains() > 0.2 and PheromoneBomb.next then
 		return MongooseBite
 	end
 	if KillCommand:usable() and KillCommand:wontCapFocus() and (MongooseFury:stack() < 5 or Focus() < MongooseBite:cost()) then
 		return KillCommand
 	end
-	if WildfireBomb:usable() and ShrapnelBomb.known and Focus() > 60 and SerpentSting:remains() > 3 * GCD() then
+	if WildfireBomb:usable() and ShrapnelBomb.next and Focus() > 60 and SerpentSting:remains() > 3 * GCD() then
 		return WildfireBomb
 	end
 	if SerpentSting:usable() and SerpentSting:refreshable() and not ShrapnelBomb:up() then
@@ -1393,7 +1394,7 @@ actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.
 	if SerpentSting:usable() and SerpentSting:refreshable() then
 		return SerpentSting
 	end
-	if WildfireBomb:usable() and ((VolatileBomb.known and SerpentSting:up()) or PheromoneBomb.known or (ShrapnelBomb.known and Focus() > 50)) then
+	if WildfireBomb:usable() and ((VolatileBomb.next and SerpentSting:up()) or PheromoneBomb.next or (ShrapnelBomb.next and Focus() > 50)) then
 		return WildfireBomb
 	end
 end
@@ -2038,6 +2039,11 @@ local function UpdateAbilityData()
 	end
 	if MongooseBite.known then
 		RaptorStrike.known = false
+	end
+	if WildfireInfusion.known then
+		ShrapnelBomb.known = true
+		PheromoneBomb.known = true
+		VolatileBomb.known = true
 	end
 end
 
