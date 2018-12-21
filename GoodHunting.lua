@@ -1076,7 +1076,7 @@ local function UpdateVars()
 	Target.health = UnitHealth('target')
 	table.remove(Target.healthArray, 1)
 	Target.healthArray[#Target.healthArray + 1] = Target.health
-	Target.timeToDieMax = Target.health / UnitHealthMax('player') * 5
+	Target.timeToDieMax = Target.health / UnitHealthMax('player') * 10
 	Target.healthPercentage = Target.healthMax > 0 and (Target.health / Target.healthMax * 100) or 100
 	Target.healthLostPerSec = (Target.healthArray[1] - Target.health) / 3
 	Target.timeToDie = Target.healthLostPerSec > 0 and min(Target.timeToDieMax, (Target.health - (Target.healthLostPerSec * var.execute_remains) / Target.healthLostPerSec)) or Target.timeToDieMax
@@ -1151,6 +1151,7 @@ actions+=/run_action_list,name=st,if=active_enemies<2
 actions+=/run_action_list,name=cleave
 actions+=/arcane_torrent
 ]]
+	var.ss_refresh = SerpentSting:refreshable() and (((Target.timeToDie - SerpentSting:remains()) > (SerpentSting:tickTime() * 2)) or (VipersVenom.known and VipersVenom:up()))
 	local apl
 	apl = self:cds()
 	if Enemies() < 2 then
@@ -1220,7 +1221,7 @@ actions.st+=/wildfire_bomb,if=dot.wildfire_bomb.refreshable
 			return WildfireBomb
 		end
 		if MongooseBite.known and MongooseFury:remains() > 0.2 and MongooseFury:stack() == 5 then
-			if SerpentSting:usable() and SerpentSting:refreshable() then
+			if SerpentSting:usable() and var.ss_refresh then
 				return SerpentSting
 			end
 			if MongooseBite:usable() then
@@ -1254,7 +1255,7 @@ actions.st+=/wildfire_bomb,if=dot.wildfire_bomb.refreshable
 	if FlankingStrike:usable() and FlankingStrike:wontCapFocus() then
 		return FlankingStrike
 	end
-	if SerpentSting:usable() and ((VipersVenom.known and VipersVenom:up()) or (SerpentSting:refreshable() and (not MongooseBite.known or not VipersVenom.known or LatentPoison.known or VenomousFangs.known))) then
+	if SerpentSting:usable() and ((VipersVenom.known and VipersVenom:up()) or (var.ss_refresh and (not MongooseBite.known or not VipersVenom.known or LatentPoison.known or VenomousFangs.known))) then
 		return SerpentSting
 	end
 	if MongooseBite:usable() and (MongooseFury:remains() > 0.2 or Focus() > 60) then
@@ -1266,7 +1267,7 @@ actions.st+=/wildfire_bomb,if=dot.wildfire_bomb.refreshable
 	if WildfireBomb:usable() and WildfireBomb:refreshable() then
 		return WildfireBomb
 	end
-	if SerpentSting:usable() and SerpentSting:refreshable() then
+	if SerpentSting:usable() and var.ss_refresh then
 		return SerpentSting
 	end
 end
@@ -1317,7 +1318,7 @@ actions.wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.tickin
 	if FlankingStrike:usable() and FlankingStrike:wontCapFocus() then
 		return FlankingStrike
 	end
-	if SerpentSting:usable() and ((VipersVenom.known and VipersVenom:up()) or (SerpentSting:refreshable() and (not MongooseBite.known or not VipersVenom.known or VolatileBomb.next and not ShrapnelBomb:up() or LatentPoison.known or VenomousFangs.known or MongooseFury:stack() == 5))) then
+	if SerpentSting:usable() and ((VipersVenom.known and VipersVenom:up()) or (var.ss_refresh and (not MongooseBite.known or not VipersVenom.known or VolatileBomb.next and not ShrapnelBomb:up() or LatentPoison.known or VenomousFangs.known or MongooseFury:stack() == 5))) then
 		return SerpentSting
 	end
 	if TermsOfEngagement.known and Harpoon:usable() then
@@ -1329,7 +1330,7 @@ actions.wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.tickin
 	if RaptorStrike:usable() then
 		return RaptorStrike
 	end
-	if SerpentSting:usable() and SerpentSting:refreshable() then
+	if SerpentSting:usable() and var.ss_refresh then
 		return SerpentSting
 	end
 	if WildfireBomb:usable() and ((VolatileBomb.next and SerpentSting:up()) or PheromoneBomb.next or (ShrapnelBomb.next and Focus() > 50)) then
@@ -1358,7 +1359,7 @@ actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.
 	if MongooseBite:usable() and MongooseBite:stack() == 5 and between(MongooseFury:remains(), 0.2, GCD()) then
 		return MongooseBite
 	end
-	if SerpentSting:usable() and SerpentSting:down() then
+	if SerpentSting:usable() and SerpentSting:down() and var.ss_refresh then
 		return SerpentSting
 	end
 	if WildfireBomb:usable() and (WildfireBomb:fullRechargeTime() < GCD() or (WildfireBomb:wontCapFocus() and ((VolatileBomb.next and SerpentSting:up() and SerpentSting:refreshable()) or (PheromoneBomb.next and not MongooseFury:up() and WildfireBomb:wontCapFocus(KillCommand:castRegen() * 3))))) then
@@ -1385,13 +1386,13 @@ actions.mb_ap_wfi_st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.
 	if WildfireBomb:usable() and ShrapnelBomb.next and Focus() > 60 and SerpentSting:remains() > 3 * GCD() then
 		return WildfireBomb
 	end
-	if SerpentSting:usable() and SerpentSting:refreshable() and not ShrapnelBomb:up() then
+	if SerpentSting:usable() and var.ss_refresh and not ShrapnelBomb:up() then
 		return SerpentSting
 	end
 	if MongooseBite:usable() and (MongooseFury:remains() > 0.2 or Focus() > 60 or ShrapnelBomb:up()) then
 		return MongooseBite
 	end
-	if SerpentSting:usable() and SerpentSting:refreshable() then
+	if SerpentSting:usable() and var.ss_refresh then
 		return SerpentSting
 	end
 	if WildfireBomb:usable() and ((VolatileBomb.next and SerpentSting:up()) or PheromoneBomb.next or (ShrapnelBomb.next and Focus() > 50)) then
@@ -1468,7 +1469,7 @@ actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
 	if TermsOfEngagement.known and Harpoon:usable() then
 		UseCooldown(Harpoon)
 	end
-	if SerpentSting:usable() and SerpentSting:refreshable() and (not TipOfTheSpear.known or TipOfTheSpear:stack() < 3) then
+	if SerpentSting:usable() and var.ss_refresh and (not TipOfTheSpear.known or TipOfTheSpear:stack() < 3) then
 		return SerpentSting
 	end
 	if MongooseBite:usable() then
