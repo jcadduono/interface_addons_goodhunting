@@ -74,7 +74,7 @@ local function InitializeVariables()
 			survival = false,
 		},
 		alpha = 1,
-		frequency = 0.05,
+		frequency = 0.1,
 		previous = true,
 		always_on = false,
 		cooldown = true,
