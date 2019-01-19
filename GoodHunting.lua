@@ -988,6 +988,13 @@ end
 
 -- Start Ability Modifications
 
+function SerpentSting:remains()
+	if VolatileBomb.known and VolatileBomb:traveling() and Ability.up(self) then
+		return self:duration()
+	end
+	return Ability.remains(self)
+end
+
 function SerpentSting:cost()
 	if VipersVenom:up() then
 		return 0
