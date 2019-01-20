@@ -30,7 +30,7 @@ local Opt -- use this as a local table reference to GoodHunting
 SLASH_GoodHunting1, SLASH_GoodHunting2 = '/gh', '/good'
 BINDING_HEADER_GOODHUNTING = 'Good Hunting'
 
-local function InitializeVariables()
+local function InitializeOpts()
 	local function SetDefaults(t, ref)
 		local k, v
 		for k, v in next, ref do
@@ -74,7 +74,7 @@ local function InitializeVariables()
 			survival = false,
 		},
 		alpha = 1,
-		frequency = 0.1,
+		frequency = 0.2,
 		previous = true,
 		always_on = false,
 		cooldown = true,
@@ -101,7 +101,13 @@ local SPEC = {
 
 local events, glows = {}, {}
 
-local abilityTimer, currentSpec, targetMode, combatStartTime = 0, 0, 0, 0
+local timer = {
+	combat = 0,
+	display = 0,
+	health = 0
+}
+
+local currentSpec, targetMode, combatStartTime = 0, 0, 0
 
 -- current target information
 local Target = {
@@ -280,14 +286,14 @@ function autoAoe:add(guid, update)
 		return
 	end
 	local new = not self.targets[guid]
-	self.targets[guid] = GetTime()
+	self.targets[guid] = var.time
 	if update and new then
 		self:update()
 	end
 end
 
 function autoAoe:remove(guid)
-	self.blacklist[guid] = GetTime()
+	self.blacklist[guid] = var.time
 	if self.targets[guid] then
 		self.targets[guid] = nil
 		self:update()
@@ -322,16 +328,15 @@ end
 
 function autoAoe:purge()
 	local update, guid, t
-	local now = GetTime()
 	for guid, t in next, self.targets do
-		if now - t > Opt.auto_aoe_ttl then
+		if var.time - t > Opt.auto_aoe_ttl then
 			self.targets[guid] = nil
 			update = true
 		end
 	end
 	-- blacklist enemies for 2 seconds when they die to prevent out of order events from re-adding them
 	for guid, t in next, self.blacklist do
-		if now - t > 2 then
+		if var.time - t > 2 then
 			self.blacklist[guid] = nil
 		end
 	end
@@ -491,6 +496,9 @@ function Ability:cooldownDuration()
 end
 
 function Ability:cooldown()
+	if self.cooldown_duration > 0 and self:casting() then
+		return self.cooldown_duration
+	end
 	local start, duration = GetSpellCooldown(self.spellId)
 	if start == 0 then
 		return 0
@@ -574,7 +582,7 @@ function Ability:tickTime()
 end
 
 function Ability:previous()
-	if self:channeling() then
+	if self:casting() or self:channeling() then
 		return true
 	end
 	return PreviousGCD[1] == self or var.last_ability == self
@@ -591,14 +599,14 @@ function Ability:autoAoe()
 end
 
 function Ability:recordTargetHit(guid)
-	self.targets_hit[guid] = GetTime()
+	self.targets_hit[guid] = var.time
 	if not self.first_hit_time then
 		self.first_hit_time = self.targets_hit[guid]
 	end
 end
 
 function Ability:updateTargetsHit()
-	if self.first_hit_time and GetTime() - self.first_hit_time >= 0.3 then
+	if self.first_hit_time and var.time - self.first_hit_time >= 0.3 then
 		self.first_hit_time = nil
 		autoAoe:clear()
 		local guid
@@ -615,7 +623,7 @@ end
 local trackAuras = {}
 
 function trackAuras:purge()
-	local now = GetTime() - var.time_diff
+	local now = var.time - var.time_diff
 	local _, ability, guid, expires
 	for _, ability in next, abilities.trackAuras do
 		for guid, aura in next, ability.aura_targets do
@@ -1074,39 +1082,6 @@ function RevivePet:usable()
 end
 
 -- End Ability Modifications
-
-local function UpdateVars()
-	local _, start, duration, remains, spellId
-	var.last_main = var.main
-	var.last_cd = var.cd
-	var.last_extra = var.extra
-	var.main =  nil
-	var.cd = nil
-	var.extra = nil
-	var.time = GetTime()
-	start, duration = GetSpellCooldown(61304)
-	var.gcd_remains = start > 0 and duration - (var.time - start) or 0
-	_, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
-	var.ability_casting = abilities.bySpellId[spellId]
-	var.execute_remains = max(remains and (remains / 1000 - var.time) or 0, var.gcd_remains)
-	var.haste_factor = 1 / (1 + UnitSpellHaste('player') / 100)
-	var.gcd = 1.5 * var.haste_factor
-	var.focus_regen = GetPowerRegen()
-	var.focus = UnitPower('player', 2) + (var.focus_regen * var.execute_remains)
-	if var.ability_casting then
-		var.focus = var.focus - var.ability_casting:cost()
-	end
-	var.focus = min(max(var.focus, 0), var.focus_max)
-	var.pet = UnitGUID('pet')
-	var.pet_exists = UnitExists('pet') and not UnitIsDead('pet')
-	Target.health = UnitHealth('target')
-	table.remove(Target.healthArray, 1)
-	Target.healthArray[#Target.healthArray + 1] = Target.health
-	Target.timeToDieMax = Target.health / UnitHealthMax('player') * 10
-	Target.healthPercentage = Target.healthMax > 0 and (Target.health / Target.healthMax * 100) or 100
-	Target.healthLostPerSec = (Target.healthArray[1] - Target.health) / 3
-	Target.timeToDie = Target.healthLostPerSec > 0 and min(Target.timeToDieMax, (Target.health - (Target.healthLostPerSec * var.execute_remains) / Target.healthLostPerSec)) or Target.timeToDieMax
-end
 
 local function UseCooldown(ability, overwrite, always)
 	if always or (Opt.cooldown and (not Opt.boss_only or Target.boss) and (not var.cd or overwrite)) then
@@ -1798,17 +1773,67 @@ local function UpdateAlpha()
 	ghExtraPanel:SetAlpha(Opt.alpha)
 end
 
-local function UpdateHealthArray()
-	Target.healthArray = {}
-	local i
-	for i = 1, floor(3 / Opt.frequency) do
-		Target.healthArray[i] = 0
+local function UpdateTargetHealth()
+	timer.health = 0
+	Target.health = UnitHealth('target')
+	table.remove(Target.healthArray, 1)
+	Target.healthArray[15] = Target.health
+	Target.timeToDieMax = Target.health / UnitHealthMax('player') * 10
+	Target.healthPercentage = Target.healthMax > 0 and (Target.health / Target.healthMax * 100) or 100
+	Target.healthLostPerSec = (Target.healthArray[1] - Target.health) / 3
+	Target.timeToDie = Target.healthLostPerSec > 0 and min(Target.timeToDieMax, Target.health / Target.healthLostPerSec) or Target.timeToDieMax
+end
+
+local function UpdateDisplay()
+	timer.display = 0
+	if Opt.dimmer then
+		if not var.main then
+			ghPanel.dimmer:Hide()
+		elseif var.main.spellId and IsUsableSpell(var.main.spellId) then
+			ghPanel.dimmer:Hide()
+		elseif var.main.itemId and IsUsableItem(var.main.itemId) then
+			ghPanel.dimmer:Hide()
+		else
+			ghPanel.dimmer:Show()
+		end
 	end
 end
 
 local function UpdateCombat()
-	abilityTimer = 0
-	UpdateVars()
+	timer.combat = 0
+	local _, start, duration, remains, spellId
+	var.time = GetTime()
+	var.last_main = var.main
+	var.last_cd = var.cd
+	var.last_extra = var.extra
+	var.main =  nil
+	var.cd = nil
+	var.extra = nil
+	start, duration = GetSpellCooldown(61304)
+	var.gcd_remains = start > 0 and duration - (var.time - start) or 0
+	_, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
+	var.ability_casting = abilities.bySpellId[spellId]
+	var.execute_remains = max(remains and (remains / 1000 - var.time) or 0, var.gcd_remains)
+	var.haste_factor = 1 / (1 + UnitSpellHaste('player') / 100)
+	var.gcd = 1.5 * var.haste_factor
+	var.focus_regen = GetPowerRegen()
+	var.focus = UnitPower('player', 2) + (var.focus_regen * var.execute_remains)
+	if var.ability_casting then
+		var.focus = var.focus - var.ability_casting:cost()
+	end
+	var.focus = min(max(var.focus, 0), var.focus_max)
+	var.pet = UnitGUID('pet')
+	var.pet_exists = UnitExists('pet') and not UnitIsDead('pet')
+
+	trackAuras:purge()
+	if Opt.auto_aoe then
+		local ability
+		for _, ability in next, abilities.autoAoe do
+			ability:updateTargetsHit()
+		end
+		autoAoe:purge()
+	end
+
 	var.main = APL[currentSpec]:main()
 	if var.main ~= var.last_main then
 		if var.main then
@@ -1836,21 +1861,17 @@ local function UpdateCombat()
 			ghExtraPanel:Hide()
 		end
 	end
-	if Opt.dimmer then
-		if not var.main then
-			ghPanel.dimmer:Hide()
-		elseif var.main.spellId and IsUsableSpell(var.main.spellId) then
-			ghPanel.dimmer:Hide()
-		elseif var.main.itemId and IsUsableItem(var.main.itemId) then
-			ghPanel.dimmer:Hide()
-		else
-			ghPanel.dimmer:Show()
-		end
-	end
 	if Opt.interrupt then
 		UpdateInterrupt()
 	end
 	UpdateGlows()
+	UpdateDisplay()
+end
+
+local function UpdateCombatWithin(seconds)
+	if Opt.frequency - timer.combat > seconds then
+		timer.combat = max(seconds, Opt.frequency - seconds)
+	end
 end
 
 function events:SPELL_UPDATE_COOLDOWN()
@@ -1871,6 +1892,18 @@ function events:SPELL_UPDATE_COOLDOWN()
 	end
 end
 
+function events:UNIT_SPELLCAST_START(srcName)
+	if Opt.interrupt and srcName == 'target' then
+		UpdateCombatWithin(0.05)
+	end
+end
+
+function events:UNIT_SPELLCAST_STOP(srcName)
+	if Opt.interrupt and srcName == 'target' then
+		UpdateCombatWithin(0.05)
+	end
+end
+
 function events:ADDON_LOADED(name)
 	if name == 'GoodHunting' then
 		Opt = GoodHunting
@@ -1881,9 +1914,8 @@ function events:ADDON_LOADED(name)
 		if UnitLevel('player') < 110 then
 			print('[|cFFFFD000Warning|r] Good Hunting is not designed for players under level 110, and almost certainly will not operate properly!')
 		end
-		InitializeVariables()
+		InitializeOpts()
 		Azerite:initialize()
-		UpdateHealthArray()
 		UpdateDraggable()
 		UpdateAlpha()
 		SnapAllPanels()
@@ -1897,6 +1929,7 @@ end
 
 function events:COMBAT_LOG_EVENT_UNFILTERED()
 	local timeStamp, eventType, hideCaster, srcGUID, srcName, srcFlags, srcRaidFlags, dstGUID, dstName, dstFlags, dstRaidFlags, spellId, spellName = CombatLogGetCurrentEventInfo()
+	var.time = GetTime()
 	if eventType == 'UNIT_DIED' or eventType == 'UNIT_DESTROYED' or eventType == 'UNIT_DISSIPATES' or eventType == 'SPELL_INSTAKILL' or eventType == 'PARTY_KILL' then
 		trackAuras:remove(dstGUID)
 		if Opt.auto_aoe then
@@ -1910,7 +1943,18 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			autoAoe:add(dstGUID, true)
 		end
 	end
-	if srcGUID ~= var.player and srcGUID ~= var.pet then
+	if (srcGUID ~= var.player and srcGUID ~= var.pet) or not (
+	   eventType == 'SPELL_CAST_START' or
+	   eventType == 'SPELL_CAST_SUCCESS' or
+	   eventType == 'SPELL_CAST_FAILED' or
+	   eventType == 'SPELL_AURA_REMOVED' or
+	   eventType == 'SPELL_DAMAGE' or
+	   eventType == 'SPELL_HEAL' or
+	   eventType == 'SPELL_MISSED' or
+	   eventType == 'SPELL_AURA_APPLIED' or
+	   eventType == 'SPELL_AURA_REFRESH' or
+	   eventType == 'SPELL_AURA_REMOVED')
+	then
 		return
 	end
 	local castedAbility = abilities.bySpellId[spellId]
@@ -1918,7 +1962,6 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 		--print(format('EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d', eventType, spellName, spellId))
 		return
 	end
-	var.time_diff = GetTime() - timeStamp
 --[[ DEBUG ]
 	print(format('EVENT %s TRACK CHECK FOR %s ID %d', eventType, spellName, spellId))
 	if eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' or eventType == 'SPELL_PERIODIC_DAMAGE' or eventType == 'SPELL_DAMAGE' then
@@ -1926,6 +1969,8 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 		castedAbility.last_trigger = timeStamp
 	end
 --[ DEBUG ]]
+	var.time_diff = var.time - timeStamp
+	UpdateCombatWithin(0.05)
 	if eventType == 'SPELL_CAST_SUCCESS' then
 		var.last_ability = castedAbility
 		if castedAbility.triggers_gcd then
@@ -1933,7 +1978,7 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			table.insert(PreviousGCD, 1, castedAbility)
 		end
 		if castedAbility.travel_start then
-			castedAbility.travel_start[dstGUID] = GetTime()
+			castedAbility.travel_start[dstGUID] = var.time
 		end
 		if Opt.previous and ghPanel:IsVisible() then
 			ghPreviousPanel.ability = castedAbility
@@ -1977,20 +2022,24 @@ local function UpdateTargetInfo()
 		Target.hostile = true
 		Target.healthMax = 0
 		local i
-		for i = 1, #Target.healthArray do
+		for i = 1, 15 do
 			Target.healthArray[i] = 0
 		end
 		if Opt.always_on then
+			UpdateTargetHealth()
 			UpdateCombat()
 			ghPanel:Show()
 			return true
+		end
+		if Opt.previous and combatStartTime == 0 then
+			ghPreviousPanel:Hide()
 		end
 		return
 	end
 	if guid ~= Target.guid then
 		Target.guid = guid
 		local i
-		for i = 1, #Target.healthArray do
+		for i = 1, 15 do
 			Target.healthArray[i] = UnitHealth('target')
 		end
 	end
@@ -2007,6 +2056,7 @@ local function UpdateTargetInfo()
 	end
 	Target.hostile = UnitCanAttack('player', 'target') and not UnitIsDead('target')
 	if Target.hostile or Opt.always_on then
+		UpdateTargetHealth()
 		UpdateCombat()
 		ghPanel:Show()
 		return true
@@ -2138,7 +2188,6 @@ function events:PLAYER_ENTERING_WORLD()
 	local _
 	_, var.instance = IsInInstance()
 	var.player = UnitGUID('player')
-	UpdateVars()
 end
 
 ghPanel.button:SetScript('OnClick', function(self, button, down)
@@ -2154,17 +2203,17 @@ ghPanel.button:SetScript('OnClick', function(self, button, down)
 end)
 
 ghPanel:SetScript('OnUpdate', function(self, elapsed)
-	abilityTimer = abilityTimer + elapsed
-	if abilityTimer >= Opt.frequency then
-		trackAuras:purge()
-		if Opt.auto_aoe then
-			local _, ability
-			for _, ability in next, abilities.autoAoe do
-				ability:updateTargetsHit()
-			end
-			autoAoe:purge()
-		end
+	timer.combat = timer.combat + elapsed
+	timer.display = timer.display + elapsed
+	timer.health = timer.health + elapsed
+	if timer.combat >= Opt.frequency then
 		UpdateCombat()
+	end
+	if timer.display >= 0.05 then
+		UpdateDisplay()
+	end
+	if timer.health >= 0.2 then
+		UpdateTargetHealth()
 	end
 end)
 
@@ -2251,10 +2300,9 @@ function SlashCmdList.GoodHunting(msg, editbox)
 	end
 	if startsWith(msg[1], 'freq') then
 		if msg[2] then
-			Opt.frequency = tonumber(msg[2]) or 0.05
-			UpdateHealthArray()
+			Opt.frequency = tonumber(msg[2]) or 0.2
 		end
-		return print('Good Hunting - Calculation frequency: Every |cFFFFD000' .. Opt.frequency .. '|r seconds')
+		return print('Good Hunting - Calculation frequency (max time to wait between each update): Every |cFFFFD000' .. Opt.frequency .. '|r seconds')
 	end
 	if startsWith(msg[1], 'glow') then
 		if msg[2] == 'main' then
@@ -2424,7 +2472,7 @@ function SlashCmdList.GoodHunting(msg, editbox)
 		'snap |cFF00C000above|r/|cFF00C000below|r/|cFFC00000off|r - snap the Good Hunting UI to the Blizzard combat resources frame',
 		'scale |cFFFFD000prev|r/|cFFFFD000main|r/|cFFFFD000cd|r/|cFFFFD000interrupt|r/|cFFFFD000extra|r/|cFFFFD000glow|r - adjust the scale of the Good Hunting UI icons',
 		'alpha |cFFFFD000[percent]|r - adjust the transparency of the Good Hunting UI icons',
-		'frequency |cFFFFD000[number]|r - set the calculation frequency (default is every 0.05 seconds)',
+		'frequency |cFFFFD000[number]|r - set the calculation frequency (default is every 0.2 seconds)',
 		'glow |cFFFFD000main|r/|cFFFFD000cd|r/|cFFFFD000interrupt|r/|cFFFFD000extra|r/|cFFFFD000blizzard|r |cFF00C000on|r/|cFFC00000off|r - glowing ability buttons on action bars',
 		'glow color |cFFF000000.0-1.0|r |cFF00FF000.1-1.0|r |cFF0000FF0.0-1.0|r - adjust the color of the ability button glow',
 		'previous |cFF00C000on|r/|cFFC00000off|r - previous ability icon',
