@@ -904,6 +904,7 @@ local PrimalInstincts = Ability.add(279806, true, true, 279810)
 PrimalInstincts.buff_duration = 20
 local RapidReload = Ability.add(278530, true, true)
 local VenomousFangs = Ability.add(274590, false, true)
+local WildernessSurvival = Ability.add(278532, false, true)
 -- Racials
 local ArcaneTorrent = Ability.add(80483, true, false) -- Blood Elf
 ArcaneTorrent.focus_cost = -15
