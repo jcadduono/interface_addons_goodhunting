@@ -251,7 +251,7 @@ local targetModes = {
 		{2, '2'},
 		{3, '3'},
 		{4, '4+'}
-	}
+	},
 }
 
 local function SetTargetMode(mode)
@@ -278,11 +278,19 @@ GoodHunting_ToggleTargetModeReverse = ToggleTargetModeReverse
 
 local autoAoe = {
 	targets = {},
-	blacklist = {}
+	blacklist = {},
+	ignored_units = {
+		['120651'] = true, -- Explosives (Mythic+ affix)
+	},
 }
 
 function autoAoe:add(guid, update)
 	if self.blacklist[guid] then
+		return
+	end
+	local _, _, _, _, _, unitId = strsplit('-', guid)
+	if unitId and self.ignored_units[unitId] then
+		self.blacklist[guid] = var.time + 10
 		return
 	end
 	local new = not self.targets[guid]
@@ -293,14 +301,15 @@ function autoAoe:add(guid, update)
 end
 
 function autoAoe:remove(guid)
-	self.blacklist[guid] = var.time
+	-- blacklist enemies for 2 seconds when they die to prevent out of order events from re-adding them
+	self.blacklist[guid] = var.time + 2
 	if self.targets[guid] then
 		self.targets[guid] = nil
 		self:update()
 	end
 end
 
-function autoAoe:clear(guid)
+function autoAoe:clear()
 	local guid
 	for guid in next, self.targets do
 		self.targets[guid] = nil
@@ -334,9 +343,9 @@ function autoAoe:purge()
 			update = true
 		end
 	end
-	-- blacklist enemies for 2 seconds when they die to prevent out of order events from re-adding them
+	-- remove expired blacklisted enemies
 	for guid, t in next, self.blacklist do
-		if var.time - t > 2 then
+		if var.time > t then
 			self.blacklist[guid] = nil
 		end
 	end
@@ -403,7 +412,7 @@ function Ability:usable()
 	if self:cost() > var.focus then
 		return false
 	end
-	if self.requires_pet and not var.pet_exists then
+	if self.requires_pet and not var.pet_active then
 		return false
 	end
 	if self.requires_charge and self:charges() == 0 then
@@ -440,7 +449,7 @@ function Ability:refreshable()
 end
 
 function Ability:up()
-	if self:traveling() then
+	if self:traveling() or self:casting() then
 		return true
 	end
 	local _, i, id, expires
@@ -592,27 +601,30 @@ function Ability:azeriteRank()
 	return Azerite.traits[self.spellId] or 0
 end
 
-function Ability:autoAoe()
-	self.auto_aoe = true
-	self.first_hit_time = nil
-	self.targets_hit = {}
+function Ability:autoAoe(removeUnaffected)
+	self.auto_aoe = {
+		remove = removeUnaffected,
+		targets = {}
+	}
 end
 
 function Ability:recordTargetHit(guid)
-	self.targets_hit[guid] = var.time
-	if not self.first_hit_time then
-		self.first_hit_time = self.targets_hit[guid]
+	self.auto_aoe.targets[guid] = var.time
+	if not self.auto_aoe.start_time then
+		self.auto_aoe.start_time = self.auto_aoe.targets[guid]
 	end
 end
 
 function Ability:updateTargetsHit()
-	if self.first_hit_time and var.time - self.first_hit_time >= 0.3 then
-		self.first_hit_time = nil
-		autoAoe:clear()
+	if self.auto_aoe.start_time and var.time - self.auto_aoe.start_time >= 0.3 then
+		self.auto_aoe.start_time = nil
+		if self.auto_aoe.remove then
+			autoAoe:clear()
+		end
 		local guid
-		for guid in next, self.targets_hit do
+		for guid in next, self.auto_aoe.targets do
 			autoAoe:add(guid)
-			self.targets_hit[guid] = nil
+			self.auto_aoe.targets[guid] = nil
 		end
 		autoAoe:update()
 	end
@@ -646,6 +658,9 @@ function Ability:trackAuras()
 end
 
 function Ability:applyAura(timeStamp, guid)
+	if autoAoe.blacklist[guid] then
+		return
+	end
 	local aura = {
 		expires = timeStamp + self:duration()
 	}
@@ -653,6 +668,9 @@ function Ability:applyAura(timeStamp, guid)
 end
 
 function Ability:refreshAura(timeStamp, guid)
+	if autoAoe.blacklist[guid] then
+		return
+	end
 	local aura = self.aura_targets[guid]
 	if not aura then
 		self:applyAura(timeStamp, guid)
@@ -703,7 +721,7 @@ RevivePet.focus_cost = 10
 ---- Survival
 local Carve = Ability.add(187708, false, true)
 Carve.focus_cost = 35
-Carve:autoAoe()
+Carve:autoAoe(true)
 local CoordinatedAssault = Ability.add(266779, true, true)
 CoordinatedAssault.cooldown_duration = 120
 CoordinatedAssault.buff_duration = 20
@@ -743,7 +761,7 @@ WildfireBomb.tick_interval = 1
 WildfireBomb.hasted_cooldown = true
 WildfireBomb.requires_charge = true
 WildfireBomb:setVelocity(35)
-WildfireBomb:autoAoe()
+WildfireBomb:autoAoe(true)
 ------ Talents
 local AlphaPredator = Ability.add(269737, false, true)
 local AMurderOfCrows = Ability.add(131894, false, true, 131900)
@@ -762,7 +780,7 @@ Butchery.focus_cost = 30
 Butchery.cooldown_duration = 9
 Butchery.hasted_cooldown = true
 Butchery.requires_charge = true
-Butchery:autoAoe()
+Butchery:autoAoe(true)
 local Chakrams = Ability.add(259391, false, true, 259398)
 Chakrams.focus_cost = 30
 Chakrams.cooldown_duration = 20
@@ -785,7 +803,7 @@ PheromoneBomb.tick_interval = 1
 PheromoneBomb.hasted_cooldown = true
 PheromoneBomb.requires_charge = true
 PheromoneBomb:setVelocity(35)
-PheromoneBomb:autoAoe()
+PheromoneBomb:autoAoe(true)
 local Predator = Ability.add(260249, true, true) -- Bloodseeker buff
 local ShrapnelBomb = Ability.add(270335, false, true, 270339) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
 ShrapnelBomb.cooldown_duration = 18
@@ -795,7 +813,7 @@ ShrapnelBomb.hasted_cooldown = true
 ShrapnelBomb.requires_charge = true
 ShrapnelBomb:setVelocity(35)
 ShrapnelBomb:autoAoe()
-ShrapnelBomb:trackAuras()
+ShrapnelBomb:trackAuras(true)
 local SteelTrap = Ability.add(162488, false, true, 162487)
 SteelTrap.cooldown_duration = 30
 SteelTrap.buff_duration = 20
@@ -814,7 +832,7 @@ VolatileBomb.tick_interval = 1
 VolatileBomb.hasted_cooldown = true
 VolatileBomb.requires_charge = true
 VolatileBomb:setVelocity(35)
-VolatileBomb:autoAoe()
+VolatileBomb:autoAoe(true)
 local WildfireInfusion = Ability.add(271014, false, true)
 ------ Procs
 
@@ -827,7 +845,6 @@ local VenomousFangs = Ability.add(274590, false, true)
 -- Racials
 local ArcaneTorrent = Ability.add(80483, true, false) -- Blood Elf
 ArcaneTorrent.focus_cost = -15
-ArcaneTorrent.triggers_gcd = false
 -- Trinket Effects
 
 -- End Abilities
@@ -992,7 +1009,7 @@ local function BloodlustActive()
 end
 
 local function TargetIsStunnable()
-	if UnitIsPlayer('target') then
+	if Target.player then
 		return true
 	end
 	if Target.boss then
@@ -1001,7 +1018,7 @@ local function TargetIsStunnable()
 	if var.instance == 'raid' then
 		return false
 	end
-	if UnitHealthMax('target') > UnitHealthMax('player') * 25 then
+	if Target.healthMax > var.health_max * 10 then
 		return false
 	end
 	return true
@@ -1055,7 +1072,7 @@ function WildfireInfusion:update()
 end
 
 function CallPet:usable()
-	if UnitExists('pet') or IsFlying() then
+	if var.pet_active then
 		return false
 	end
 	return Ability.usable(self)
@@ -1107,9 +1124,19 @@ local APL = {
 }
 
 APL[SPEC.BEASTMASTERY].main = function(self)
+	if CallPet:usable() then
+		UseExtra(CallPet)
+	elseif RevivePet:usable() then
+		UseExtra(RevivePet)
+	elseif MendPet:usable() then
+		UseExtra(MendPet)
+	end
 	if TimeInCombat() == 0 then
-		if not InArenaOrBattleground() then
-			if Opt.pot and BattlePotionOfAgility:usable() then
+		if Opt.pot and not InArenaOrBattleground() then
+			if FlaskOfTheCurrents:usable() and FlaskOfTheCurrents.buff:remains() < 300 then
+				UseCooldown(FlaskOfTheUndertow)
+			end
+			if BattlePotionOfAgility:usable() then
 				UseCooldown(BattlePotionOfAgility)
 			end
 		end
@@ -1117,9 +1144,19 @@ APL[SPEC.BEASTMASTERY].main = function(self)
 end
 
 APL[SPEC.MARKSMANSHIP].main = function(self)
+	if CallPet:usable() then
+		UseExtra(CallPet)
+	elseif RevivePet:usable() then
+		UseExtra(RevivePet)
+	elseif MendPet:usable() then
+		UseExtra(MendPet)
+	end
 	if TimeInCombat() == 0 then
-		if not InArenaOrBattleground() then
-			if Opt.pot and BattlePotionOfAgility:usable() then
+		if Opt.pot and not InArenaOrBattleground() then
+			if FlaskOfTheCurrents:usable() and FlaskOfTheCurrents.buff:remains() < 300 then
+				UseCooldown(FlaskOfTheUndertow)
+			end
+			if BattlePotionOfAgility:usable() then
 				UseCooldown(BattlePotionOfAgility)
 			end
 		end
@@ -1135,8 +1172,11 @@ APL[SPEC.SURVIVAL].main = function(self)
 		UseExtra(MendPet)
 	end
 	if TimeInCombat() == 0 then
-		if not InArenaOrBattleground() then
-			if Opt.pot and BattlePotionOfAgility:usable() then
+		if Opt.pot and not InArenaOrBattleground() then
+			if FlaskOfTheCurrents:usable() and FlaskOfTheCurrents.buff:remains() < 300 then
+				UseCooldown(FlaskOfTheUndertow)
+			end
+			if BattlePotionOfAgility:usable() then
 				UseCooldown(BattlePotionOfAgility)
 			end
 		end
@@ -1643,21 +1683,13 @@ local function Disappear()
 	UpdateGlows()
 end
 
-function Equipped(name, slot)
-	local function SlotMatches(name, slot)
-		local ilink = GetInventoryItemLink('player', slot)
-		if ilink then
-			local iname = ilink:match('%[(.*)%]')
-			return (iname and iname:find(name))
-		end
-		return false
-	end
+local function Equipped(itemID, slot)
 	if slot then
-		return SlotMatches(name, slot)
+		return GetInventoryItemID('player', slot) == itemID
 	end
 	local i
 	for i = 1, 19 do
-		if SlotMatches(name, i) then
+		if GetInventoryItemID('player', i) == itemID then
 			return true
 		end
 	end
@@ -1778,7 +1810,7 @@ local function UpdateTargetHealth()
 	Target.health = UnitHealth('target')
 	table.remove(Target.healthArray, 1)
 	Target.healthArray[15] = Target.health
-	Target.timeToDieMax = Target.health / UnitHealthMax('player') * 10
+	Target.timeToDieMax = Target.health / UnitHealthMax('player') * 15
 	Target.healthPercentage = Target.healthMax > 0 and (Target.health / Target.healthMax * 100) or 100
 	Target.healthLostPerSec = (Target.healthArray[1] - Target.health) / 3
 	Target.timeToDie = Target.healthLostPerSec > 0 and min(Target.timeToDieMax, Target.health / Target.healthLostPerSec) or Target.timeToDieMax
@@ -1816,6 +1848,8 @@ local function UpdateCombat()
 	var.execute_remains = max(remains and (remains / 1000 - var.time) or 0, var.gcd_remains)
 	var.haste_factor = 1 / (1 + UnitSpellHaste('player') / 100)
 	var.gcd = 1.5 * var.haste_factor
+	var.health = UnitHealth('player')
+	var.health_max = UnitHealthMax('player')
 	var.focus_regen = GetPowerRegen()
 	var.focus = UnitPower('player', 2) + (var.focus_regen * var.execute_remains)
 	if var.ability_casting then
@@ -1823,7 +1857,7 @@ local function UpdateCombat()
 	end
 	var.focus = min(max(var.focus, 0), var.focus_max)
 	var.pet = UnitGUID('pet')
-	var.pet_exists = UnitExists('pet') and not UnitIsDead('pet')
+	var.pet_active = IsFlying() or UnitExists('pet') and not UnitIsDead('pet')
 
 	trackAuras:purge()
 	if Opt.auto_aoe then
@@ -1928,18 +1962,19 @@ function events:ADDON_LOADED(name)
 end
 
 function events:COMBAT_LOG_EVENT_UNFILTERED()
-	local timeStamp, eventType, hideCaster, srcGUID, srcName, srcFlags, srcRaidFlags, dstGUID, dstName, dstFlags, dstRaidFlags, spellId, spellName = CombatLogGetCurrentEventInfo()
+	local timeStamp, eventType, _, srcGUID, _, _, _, dstGUID, _, _, _, spellId, spellName, _, missType = CombatLogGetCurrentEventInfo()
 	var.time = GetTime()
 	if eventType == 'UNIT_DIED' or eventType == 'UNIT_DESTROYED' or eventType == 'UNIT_DISSIPATES' or eventType == 'SPELL_INSTAKILL' or eventType == 'PARTY_KILL' then
 		trackAuras:remove(dstGUID)
 		if Opt.auto_aoe then
 			autoAoe:remove(dstGUID)
 		end
+		return
 	end
 	if Opt.auto_aoe and (eventType == 'SWING_DAMAGE' or eventType == 'SWING_MISSED') then
 		if dstGUID == var.player then
 			autoAoe:add(srcGUID, true)
-		elseif srcGUID == var.player then
+		elseif srcGUID == var.player and not (missType == 'EVADE' or missType == 'IMMUNE') then
 			autoAoe:add(dstGUID, true)
 		end
 	end
@@ -1949,7 +1984,6 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 	   eventType == 'SPELL_CAST_FAILED' or
 	   eventType == 'SPELL_AURA_REMOVED' or
 	   eventType == 'SPELL_DAMAGE' or
-	   eventType == 'SPELL_HEAL' or
 	   eventType == 'SPELL_MISSED' or
 	   eventType == 'SPELL_AURA_APPLIED' or
 	   eventType == 'SPELL_AURA_REFRESH' or
@@ -1997,12 +2031,16 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			castedAbility:removeAura(dstGUID)
 		end
 	end
-	if eventType == 'SPELL_MISSED' or eventType == 'SPELL_DAMAGE' or eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
+	if dstGUID ~= var.player and dstGUID ~= var.pet and (eventType == 'SPELL_MISSED' or eventType == 'SPELL_DAMAGE' or eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH') then
 		if castedAbility.travel_start and castedAbility.travel_start[dstGUID] then
 			castedAbility.travel_start[dstGUID] = nil
 		end
-		if Opt.auto_aoe and castedAbility.auto_aoe then
-			castedAbility:recordTargetHit(dstGUID)
+		if Opt.auto_aoe then
+			if missType == 'EVADE' or missType == 'IMMUNE' then
+				autoAoe:remove(dstGUID)
+			elseif castedAbility.auto_aoe then
+				castedAbility:recordTargetHit(dstGUID)
+			end
 		end
 		if Opt.previous and Opt.miss_effect and eventType == 'SPELL_MISSED' and ghPanel:IsVisible() and castedAbility == ghPreviousPanel.ability then
 			ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\misseffect.blp')
@@ -2019,6 +2057,7 @@ local function UpdateTargetInfo()
 	if not guid then
 		Target.guid = nil
 		Target.boss = false
+		Target.player = false
 		Target.hostile = true
 		Target.healthMax = 0
 		local i
@@ -2045,7 +2084,8 @@ local function UpdateTargetInfo()
 	end
 	Target.level = UnitLevel('target')
 	Target.healthMax = UnitHealthMax('target')
-	if UnitIsPlayer('target') then
+	Target.player = UnitIsPlayer('target')
+	if Target.player then
 		Target.boss = false
 	elseif Target.level == -1 then
 		Target.boss = true
@@ -2092,10 +2132,14 @@ function events:PLAYER_REGEN_ENABLED()
 		end
 	end
 	if Opt.auto_aoe then
-		for guid in next, autoAoe.targets do
-			autoAoe.targets[guid] = nil
+		for _, ability in next, abilities.autoAoe do
+			ability.auto_aoe.start_time = nil
+			for guid in next, ability.auto_aoe.targets do
+				ability.auto_aoe.targets[guid] = nil
+			end
 		end
-		SetTargetMode(1)
+		autoAoe:clear()
+		autoAoe:update()
 	end
 	if var.last_ability then
 		var.last_ability = nil
@@ -2275,7 +2319,7 @@ function SlashCmdList.GoodHunting(msg, editbox)
 			end
 			return print('Good Hunting - Interrupt ability icon scale set to: |cFFFFD000' .. Opt.scale.interrupt .. '|r times')
 		end
-		if startsWith(msg[2], 'to') then
+		if startsWith(msg[2], 'ex') then
 			if msg[3] then
 				Opt.scale.extra = tonumber(msg[3]) or 0.4
 				ghExtraPanel:SetScale(Opt.scale.extra)
