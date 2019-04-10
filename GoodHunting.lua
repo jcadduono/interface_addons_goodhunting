@@ -705,11 +705,73 @@ RevivePet.focus_cost = 10
 ------ Procs
 
 ------ Talents
-
+local AMurderOfCrows = Ability.add(131894, false, true, 131900)
+AMurderOfCrows.cooldown_duration = 60
+AMurderOfCrows.buff_duration = 15
+AMurderOfCrows.focus_cost = 30
+AMurderOfCrows.tick_interval = 1
+AMurderOfCrows.hasted_ticks = true
 ---- Beast Mastery
-
+local AspectOfTheWild = Ability.add(193530, true, true)
+AspectOfTheWild.cooldown_duration = 120
+AspectOfTheWild.buff_duration = 20
+local BarbedShot = Ability.add(217200, false, true)
+BarbedShot.cooldown_duration = 12
+BarbedShot.buff_duration = 8
+BarbedShot.tick_interval = 2
+BarbedShot.hasted_cooldown = true
+BarbedShot.requires_charge = true
+BarbedShot:setVelocity(50)
+BarbedShot.buff = Ability.add(246152, true, true)
+BarbedShot.buff.buff_duration = 8
+local BeastCleave = Ability.add(268877, true, true)
+BeastCleave.buff_duration = 4
+BeastCleave.pet = Ability.add(118455, false, true, 118459)
+BeastCleave.pet:autoAoe()
+local BestialWrath = Ability.add(19574, true, true)
+BestialWrath.cooldown_duration = 90
+BestialWrath.buff_duration = 15
+BestialWrath.pet = Ability.add(186254, true, true)
+BestialWrath.pet.auraTarget = 'pet'
+BestialWrath.pet.buff_duration = 15
+local CobraShot = Ability.add(193455, false, true)
+CobraShot.focus_cost = 35
+CobraShot:setVelocity(45)
+local KillCommandBM = Ability.add(34026, false, true, 83381)
+KillCommandBM.focus_cost = 30
+KillCommandBM.cooldown_duration = 7.5
+KillCommandBM.hasted_cooldown = true
+KillCommandBM.requires_pet = true
+local MultiShotBM = Ability.add(2643, false, true)
+MultiShotBM.focus_cost = 40
+MultiShotBM:setVelocity(50)
+MultiShotBM:autoAoe(true)
+local PetFrenzy = Ability.add(272790, true, true)
+PetFrenzy.auraTarget = 'pet'
+PetFrenzy.buff_duration = 8
 ------ Talents
-
+local Barrage = Ability.add(120360, false, true, 120361)
+Barrage.cooldown_duration = 20
+Barrage.focus_cost = 60
+Barrage:autoAoe(true)
+local ChimaeraShot = Ability.add(53209, false, true)
+ChimaeraShot.cooldown_duration = 15
+ChimaeraShot.hasted_cooldown = true
+ChimaeraShot:setVelocity(40)
+local DireBeast = Ability.add(120679, true, true, 281036)
+DireBeast.cooldown_duration = 20
+DireBeast.buff_duration = 8
+local KillerInstinct = Ability.add(273887, false, true)
+local OneWithThePack = Ability.add(199528, false, true)
+local Stampede = Ability.add(201430, false, true, 201594)
+Stampede.cooldown_duration = 180
+Stampede.buff_duration = 12
+Stampede:autoAoe()
+local SpittingCobra = Ability.add(194407, true, true)
+SpittingCobra.cooldown_duration = 90
+SpittingCobra.buff_duration = 20
+local Stomp = Ability.add(199530, false, true, 201754)
+Stomp:autoAoe(true)
 ------ Procs
 
 ---- Marksmanship
@@ -764,11 +826,6 @@ WildfireBomb:setVelocity(35)
 WildfireBomb:autoAoe(true)
 ------ Talents
 local AlphaPredator = Ability.add(269737, false, true)
-local AMurderOfCrows = Ability.add(131894, false, true, 131900)
-AMurderOfCrows.focus_cost = 30
-AMurderOfCrows.cooldown_duration = 60
-AMurderOfCrows.tick_interval = 1
-AMurderOfCrows.hasted_ticks = true
 local BirdsOfPrey = Ability.add(260331, false, true)
 local Bloodseeker = Ability.add(260248, false, true, 259277)
 Bloodseeker.buff_duration = 8
@@ -839,8 +896,13 @@ local WildfireInfusion = Ability.add(271014, false, true)
 -- Azerite Traits
 local BlurOfTalons = Ability.add(277653, true, true, 277969)
 BlurOfTalons.buff_duration = 6
+local DanceOfDeath = Ability.add(274441, true, true, 274443)
+DanceOfDeath.buff_duration = 8
 local LatentPoison = Ability.add(273283, true, true, 273284)
 LatentPoison.buff_duration = 10
+local PrimalInstincts = Ability.add(279806, true, true, 279810)
+PrimalInstincts.buff_duration = 20
+local RapidReload = Ability.add(278530, true, true)
 local VenomousFangs = Ability.add(274590, false, true)
 -- Racials
 local ArcaneTorrent = Ability.add(80483, true, false) -- Blood Elf
@@ -1132,6 +1194,15 @@ APL[SPEC.BEASTMASTERY].main = function(self)
 		UseExtra(MendPet)
 	end
 	if TimeInCombat() == 0 then
+--[[
+actions.precombat=flask
+actions.precombat+=/summon_pet
+actions.precombat+=/potion
+# Adjusts the duration and cooldown of Aspect of the Wild and Primal Instincts by the duration of an unhasted GCD when they're used precombat. As AotW has a 1.3s GCD and affects itself this is 1.1s.
+actions.precombat+=/aspect_of_the_wild,precast_time=1.1,if=!azerite.primal_instincts.enabled
+# Adjusts the duration and cooldown of Bestial Wrath and Haze of Rage by the duration of an unhasted GCD when they're used precombat.
+actions.precombat+=/bestial_wrath,precast_time=1.5,if=azerite.primal_instincts.enabled
+]]
 		if Opt.pot and not InArenaOrBattleground() then
 			if FlaskOfTheCurrents:usable() and FlaskOfTheCurrents.buff:remains() < 300 then
 				UseCooldown(FlaskOfTheUndertow)
@@ -1140,6 +1211,163 @@ APL[SPEC.BEASTMASTERY].main = function(self)
 				UseCooldown(BattlePotionOfAgility)
 			end
 		end
+		if PrimalInstincts.known then
+			if BestialWrath:usable() then
+				UseCooldown(BestialWrath)
+			end
+		else
+			if AspectOfTheWild:usable() then
+				UseCooldown(AspectOfTheWild)
+			end
+		end
+	end
+--[[
+actions=auto_shot
+actions+=/use_items
+actions+=/call_action_list,name=cds
+actions+=/call_action_list,name=st,if=active_enemies<2
+actions+=/call_action_list,name=cleave,if=active_enemies>1
+]]
+	self:cds()
+	if Enemies() > 1 then
+		return self:cleave()
+	end
+	return self:st()
+end
+
+APL[SPEC.BEASTMASTERY].cds = function(self)
+--[[
+actions.cds=ancestral_call,if=cooldown.bestial_wrath.remains>30
+actions.cds+=/fireblood,if=cooldown.bestial_wrath.remains>30
+actions.cds+=/berserking,if=buff.aspect_of_the_wild.up&(target.time_to_die>cooldown.berserking.duration+duration|(target.health.pct<35|!talent.killer_instinct.enabled))|target.time_to_die<13
+actions.cds+=/blood_fury,if=buff.aspect_of_the_wild.up&(target.time_to_die>cooldown.blood_fury.duration+duration|(target.health.pct<35|!talent.killer_instinct.enabled))|target.time_to_die<16
+actions.cds+=/lights_judgment,if=pet.cat.buff.frenzy.up&pet.cat.buff.frenzy.remains>gcd.max|!pet.cat.buff.frenzy.up
+actions.cds+=/potion,if=buff.bestial_wrath.up&buff.aspect_of_the_wild.up&(target.health.pct<35|!talent.killer_instinct.enabled)|target.time_to_die<25
+]]
+	if Opt.pot and BattlePotionOfAgility:usable() and (BestialWrath:up() and AspectOfTheWild:up() and (Target.healthPercentage < 35 or not KillerInstinct.known) or Target.timeToDie < 25) then
+		UseCooldown(BattlePotionOfAgility)
+	end
+end
+
+APL[SPEC.BEASTMASTERY].st = function(self)
+--[[
+actions.st=barbed_shot,if=pet.cat.buff.frenzy.up&pet.cat.buff.frenzy.remains<=gcd.max|full_recharge_time<gcd.max&cooldown.bestial_wrath.remains|azerite.primal_instincts.enabled&cooldown.aspect_of_the_wild.remains<gcd
+actions.st+=/aspect_of_the_wild
+actions.st+=/a_murder_of_crows
+actions.st+=/stampede,if=buff.aspect_of_the_wild.up&buff.bestial_wrath.up|target.time_to_die<15
+actions.st+=/bestial_wrath,if=cooldown.aspect_of_the_wild.remains>20|target.time_to_die<15
+actions.st+=/kill_command
+actions.st+=/chimaera_shot
+actions.st+=/dire_beast
+actions.st+=/barbed_shot,if=pet.cat.buff.frenzy.down&(charges_fractional>1.8|buff.bestial_wrath.up)|cooldown.aspect_of_the_wild.remains<pet.cat.buff.frenzy.duration-gcd&azerite.primal_instincts.enabled|azerite.dance_of_death.rank>1&buff.dance_of_death.down&crit_pct_current>40|target.time_to_die<9
+actions.st+=/barrage
+actions.st+=/cobra_shot,if=(focus-cost+focus.regen*(cooldown.kill_command.remains-1)>action.kill_command.cost|cooldown.kill_command.remains>1+gcd)&cooldown.kill_command.remains>1
+actions.st+=/spitting_cobra
+actions.st+=/barbed_shot,if=charges_fractional>1.4
+]]
+	if BarbedShot:usable() and ((PetFrenzy:up() and PetFrenzy:remains() <= GCD()) or (BarbedShot:fullRechargeTime() < GCD() and not BestialWrath:ready()) or (PrimalInstincts.known and AspectOfTheWild:ready(GCD()))) then
+		return BarbedShot
+	end
+	if AspectOfTheWild:usable() then
+		UseCooldown(AspectOfTheWild)
+	end
+	if AMurderOfCrows:usable() then
+		UseCooldown(AMurderOfCrows)
+	end
+	if Stampede:usable() and (AspectOfTheWild:up() and BestialWrath:up() or Target.timeToDie < 15) then
+		UseCooldown(Stampede)
+	end
+	if BestialWrath:usable() and (AspectOfTheWild:cooldown() > 20 or Target.timeToDie < 15) then
+		UseCooldown(BestialWrath)
+	end
+	if KillCommandBM:usable() then
+		return KillCommandBM
+	end
+	if ChimaeraShot:usable() then
+		return ChimaeraShot
+	end
+	if DireBeast:usable() then
+		return DireBeast
+	end
+	if BarbedShot:usable() and ((PetFrenzy:down() and (BarbedShot:chargesFractional() > 1.8 or BestialWrath:up())) or (PrimalInstincts.known and AspectOfTheWild:ready(PetFrenzy:duration() - GCD())) or (DanceOfDeath:azeriteRank() > 1 and DanceOfDeath:down() and GetCritChance() > 40) or Target.timeToDie < 9) then
+		return BarbedShot
+	end
+	if Barrage:usable() then
+		return Barrage
+	end
+	if CobraShot:usable() and KillCommandBM:cooldown() > 1 and (((Focus() - CobraShot:cost() + FocusRegen() * (KillCommandBM:cooldown() - 1)) > KillCommandBM:cost()) or KillCommandBM:cooldown() > (1 + GCD())) then
+		return CobraShot
+	end
+	if SpittingCobra:usable() then
+		UseCooldown(SpittingCobra)
+	end
+	if BarbedShot:usable() and BarbedShot:chargesFractional() > 1.4 then
+		return BarbedShot
+	end
+end
+
+APL[SPEC.BEASTMASTERY].cleave = function(self)
+--[[
+actions.cleave=barbed_shot,target_if=min:dot.barbed_shot.remains,if=pet.cat.buff.frenzy.up&pet.cat.buff.frenzy.remains<=gcd.max
+actions.cleave+=/multishot,if=gcd.max-pet.cat.buff.beast_cleave.remains>0.25
+actions.cleave+=/barbed_shot,target_if=min:dot.barbed_shot.remains,if=full_recharge_time<gcd.max&cooldown.bestial_wrath.remains
+actions.cleave+=/aspect_of_the_wild
+actions.cleave+=/stampede,if=buff.aspect_of_the_wild.up&buff.bestial_wrath.up|target.time_to_die<15
+actions.cleave+=/bestial_wrath,if=cooldown.aspect_of_the_wild.remains_guess>20|talent.one_with_the_pack.enabled|target.time_to_die<15
+actions.cleave+=/chimaera_shot
+actions.cleave+=/a_murder_of_crows
+actions.cleave+=/barrage
+actions.cleave+=/kill_command,if=active_enemies<4|!azerite.rapid_reload.enabled
+actions.cleave+=/dire_beast
+actions.cleave+=/barbed_shot,target_if=min:dot.barbed_shot.remains,if=pet.cat.buff.frenzy.down&(charges_fractional>1.8|buff.bestial_wrath.up)|cooldown.aspect_of_the_wild.remains<pet.cat.buff.frenzy.duration-gcd&azerite.primal_instincts.enabled|charges_fractional>1.4|target.time_to_die<9
+actions.cleave+=/multishot,if=azerite.rapid_reload.enabled&active_enemies>2
+actions.cleave+=/cobra_shot,if=cooldown.kill_command.remains>focus.time_to_max&(active_enemies<3|!azerite.rapid_reload.enabled)
+actions.cleave+=/spitting_cobra
+]]
+	if BarbedShot:usable() and PetFrenzy:up() and PetFrenzy:remains() <= GCD() then
+		return BarbedShot
+	end
+	if MultiShotBM:usable() and (GCD() - BeastCleave:remains()) > 0.25 then
+		return MultiShotBM
+	end
+	if BarbedShot:usable() and BarbedShot:fullRechargeTime() < GCD() and not BestialWrath:ready() then
+		return BarbedShot
+	end
+	if AspectOfTheWild:usable() then
+		UseCooldown(AspectOfTheWild)
+	end
+	if Stampede:usable() and (AspectOfTheWild:up() and BestialWrath:up() or Target.timeToDie < 15) then
+		UseCooldown(Stampede)
+	end
+	if BestialWrath:usable() and (AspectOfTheWild:cooldown() > 20 or OneWithThePack.known or Target.timeToDie < 15) then
+		UseCooldown(BestialWrath)
+	end
+	if ChimaeraShot:usable() then
+		return ChimaeraShot
+	end
+	if AMurderOfCrows:usable() then
+		UseCooldown(AMurderOfCrows)
+	end
+	if Barrage:usable() then
+		return Barrage
+	end
+	if KillCommandBM:usable() and (Enemies() < 4 or not RapidReload.known) then
+		return KillCommandBM
+	end
+	if DireBeast:usable() then
+		return DireBeast
+	end
+	if BarbedShot:usable() and ((PetFrenzy:down() and (BarbedShot:chargesFractional() > 1.8 or BestialWrath:up())) or (PrimalInstincts.known and AspectOfTheWild:ready(PetFrenzy:duration() - GCD())) or BarbedShot:chargesFractional() > 1.4 or Target.timeToDie < 9) then
+		return BarbedShot
+	end
+	if RapidReload.known and MultiShotBM:usable() and Enemies() > 2 then
+		return MultiShotBM
+	end
+	if CobraShot:usable() and KillCommandBM:cooldown() > FocusTimeToMax() and (Enemies() < 3 or not RapidReload.known) then
+		return CobraShot
+	end
+	if SpittingCobra:usable() then
+		UseCooldown(SpittingCobra)
 	end
 end
 
@@ -2169,6 +2397,17 @@ local function UpdateAbilityData()
 	end
 	if Bloodseeker.known then
 		Predator.known = true
+	end
+	if BarbedShot.known then
+		BarbedShot.buff.known = true
+		PetFrenzy.known = true
+	end
+	if BestialWrath.known then
+		BestialWrath.pet.known = true
+	end
+	if MultiShotBM.known then
+		BeastCleave.known = true
+		BeastCleave.pet.known = true
 	end
 	abilities.bySpellId = {}
 	abilities.velocity = {}
