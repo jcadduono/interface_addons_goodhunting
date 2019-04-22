@@ -2047,17 +2047,13 @@ end
 
 local function UpdateDisplay()
 	timer.display = 0
+	local dim = false
 	if Opt.dimmer then
-		if not var.main then
-			ghPanel.dimmer:Hide()
-		elseif var.main.spellId and IsUsableSpell(var.main.spellId) then
-			ghPanel.dimmer:Hide()
-		elseif var.main.itemId and IsUsableItem(var.main.itemId) then
-			ghPanel.dimmer:Hide()
-		else
-			ghPanel.dimmer:Show()
-		end
+		dim = not ((not var.main) or
+		           (var.main.spellId and IsUsableSpell(var.main.spellId)) or
+		           (var.main.itemId and IsUsableItem(var.main.itemId)))
 	end
+	ghPanel.dimmer:SetShown(dim)
 end
 
 local function UpdateCombat()
@@ -2460,6 +2456,10 @@ function events:PLAYER_SPECIALIZATION_CHANGED(unitName)
 		events:PLAYER_REGEN_ENABLED()
 		events:SPELL_UPDATE_ICON()
 	end
+end
+
+function events:PLAYER_PVP_TALENT_UPDATE()
+	UpdateAbilityData()
 end
 
 function events:PLAYER_ENTERING_WORLD()
