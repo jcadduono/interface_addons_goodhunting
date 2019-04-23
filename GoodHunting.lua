@@ -227,6 +227,15 @@ ghExtraPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
 ghExtraPanel.border = ghExtraPanel:CreateTexture(nil, 'ARTWORK')
 ghExtraPanel.border:SetAllPoints(ghExtraPanel)
 ghExtraPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
+-- Beast Mastery Pet Frenzy stacks and duration remaining on extra icon
+ghExtraPanel.frenzy = CreateFrame('Cooldown', nil, ghExtraPanel, 'CooldownFrameTemplate')
+ghExtraPanel.frenzy:SetAllPoints(ghExtraPanel)
+ghExtraPanel.frenzy.stack = ghExtraPanel.frenzy:CreateFontString(nil, 'OVERLAY')
+ghExtraPanel.frenzy.stack:SetFont('Fonts\\FRIZQT__.TTF', 38, 'OUTLINE')
+ghExtraPanel.frenzy.stack:SetTextColor(1, 1, 1, 1)
+ghExtraPanel.frenzy.stack:SetAllPoints(ghExtraPanel.frenzy)
+ghExtraPanel.frenzy.stack:SetJustifyH('CENTER')
+ghExtraPanel.frenzy.stack:SetJustifyV('CENTER')
 
 -- Start Auto AoE
 
@@ -1159,6 +1168,20 @@ function RevivePet:usable()
 		return false
 	end
 	return Ability.usable(self)
+end
+
+function PetFrenzy:start_duration_stack()
+	local _, i, id, duration, expires, stack
+	for i = 1, 40 do
+		_, _, stack, _, duration, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
+		if not id then
+			return 0, 0, 0
+		end
+		if self:match(id) then
+			return expires - duration, duration, stack
+		end
+	end
+	return 0, 0, 0
 end
 
 -- End Ability Modifications
@@ -2123,6 +2146,25 @@ local function UpdateCombat()
 	if Opt.interrupt then
 		UpdateInterrupt()
 	end
+
+	if currentSpec == SPEC.BEASTMASTERY then
+		local start, duration, stack = PetFrenzy:start_duration_stack()
+		if start > 0 then
+			ghExtraPanel.frenzy.stack:SetText(stack)
+			ghExtraPanel.frenzy:SetCooldown(start, duration)
+			ghExtraPanel.frenzy:Show()
+			if not var.extra then
+				ghExtraPanel.icon:SetTexture(PetFrenzy.icon)
+				ghExtraPanel:Show()
+			end
+		else
+			ghExtraPanel.frenzy:Hide()
+			if not var.extra then
+				ghExtraPanel:Hide()
+			end
+		end
+	end
+
 	UpdateGlows()
 	UpdateDisplay()
 end
