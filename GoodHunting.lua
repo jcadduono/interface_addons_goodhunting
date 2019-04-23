@@ -1253,6 +1253,10 @@ actions+=/call_action_list,name=st,if=active_enemies<2
 actions+=/call_action_list,name=cleave,if=active_enemies>1
 ]]
 	self:cds()
+	self.wait_barbed = PetFrenzy:stack() >= 3 and PetFrenzy:remains() < (GCD() + 0.3) and BarbedShot:ready(GCD())
+	if self.wait_barbed then
+		return BarbedShot
+	end
 	if Enemies() > 1 then
 		return self:cleave()
 	end
@@ -1289,7 +1293,7 @@ actions.st+=/cobra_shot,if=(focus-cost+focus.regen*(cooldown.kill_command.remain
 actions.st+=/spitting_cobra
 actions.st+=/barbed_shot,if=charges_fractional>1.4
 ]]
-	if BarbedShot:usable() and ((PetFrenzy:up() and PetFrenzy:remains() <= GCD()) or (BarbedShot:fullRechargeTime() < GCD() and not BestialWrath:ready()) or (PrimalInstincts.known and AspectOfTheWild:ready(GCD()))) then
+	if BarbedShot:usable() and ((PetFrenzy:up() and PetFrenzy:remains() <= (GCD() + 0.3)) or (BarbedShot:fullRechargeTime() < GCD() and not BestialWrath:ready()) or (PrimalInstincts.known and AspectOfTheWild:ready(GCD()))) then
 		return BarbedShot
 	end
 	if AspectOfTheWild:usable() then
@@ -1348,7 +1352,7 @@ actions.cleave+=/multishot,if=azerite.rapid_reload.enabled&active_enemies>2
 actions.cleave+=/cobra_shot,if=cooldown.kill_command.remains>focus.time_to_max&(active_enemies<3|!azerite.rapid_reload.enabled)
 actions.cleave+=/spitting_cobra
 ]]
-	if BarbedShot:usable() and PetFrenzy:up() and PetFrenzy:remains() <= GCD() then
+	if BarbedShot:usable() and PetFrenzy:up() and PetFrenzy:remains() <= (GCD() + 0.3) then
 		return BarbedShot
 	end
 	if MultiShotBM:usable() and (GCD() - BeastCleave:remains()) > 0.25 then
