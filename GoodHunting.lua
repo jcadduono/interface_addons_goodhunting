@@ -167,9 +167,22 @@ ghPanel.swipe = CreateFrame('Cooldown', nil, ghPanel, 'CooldownFrameTemplate')
 ghPanel.swipe:SetAllPoints(ghPanel)
 ghPanel.text = CreateFrame('Frame', nil, ghPanel)
 ghPanel.text:SetAllPoints(ghPanel)
+ghPanel.text.tl = ghPanel.text:CreateFontString(nil, 'OVERLAY')
+ghPanel.text.tl:SetFont('Fonts\\FRIZQT__.TTF', 12, 'OUTLINE')
+ghPanel.text.tl:SetPoint('TOPLEFT', ghPanel, 'TOPLEFT', 2.5, -3)
+ghPanel.text.tl:SetJustifyH('LEFT')
+ghPanel.text.tr = ghPanel.text:CreateFontString(nil, 'OVERLAY')
+ghPanel.text.tr:SetFont('Fonts\\FRIZQT__.TTF', 12, 'OUTLINE')
+ghPanel.text.tr:SetPoint('TOPRIGHT', ghPanel, 'TOPRIGHT', -2.5, -3)
+ghPanel.text.tr:SetJustifyH('RIGHT')
+ghPanel.text.bl = ghPanel.text:CreateFontString(nil, 'OVERLAY')
+ghPanel.text.bl:SetFont('Fonts\\FRIZQT__.TTF', 12, 'OUTLINE')
+ghPanel.text.bl:SetPoint('BOTTOMLEFT', ghPanel, 'BOTTOMLEFT', 2.5, 3)
+ghPanel.text.bl:SetJustifyH('LEFT')
 ghPanel.text.br = ghPanel.text:CreateFontString(nil, 'OVERLAY')
 ghPanel.text.br:SetFont('Fonts\\FRIZQT__.TTF', 12, 'OUTLINE')
-ghPanel.text.br:SetPoint('BOTTOMRIGHT', ghPanel, 'BOTTOMRIGHT', -1.5, 3)
+ghPanel.text.br:SetPoint('BOTTOMRIGHT', ghPanel, 'BOTTOMRIGHT', -2.5, 3)
+ghPanel.text.br:SetJustifyH('RIGHT')
 ghPanel.text.center = ghPanel.text:CreateFontString(nil, 'OVERLAY')
 ghPanel.text.center:SetFont('Fonts\\FRIZQT__.TTF', 12, 'OUTLINE')
 ghPanel.text.center:SetAllPoints(ghPanel.text)
@@ -1019,7 +1032,8 @@ local RealityShift = Ability:Add(302952, true, true)
 RealityShift.buff_duration = 20
 RealityShift.cooldown_duration = 30
 RealityShift.essence_id = 15
-local RecklessForce = Ability:Add(302917, true, true)
+local RecklessForce = Ability:Add(302932, true, true)
+RecklessForce.buff_duration = 3
 RecklessForce.essence_id = 28
 local StriveForPerfection = Ability:Add(299369, true, true)
 StriveForPerfection.essence_id = 22
@@ -1141,6 +1155,7 @@ function Azerite:Update()
 							self.traits[pid] = 1 + (self.traits[pid] or 0)
 							pinfo = C_AzeriteEmpoweredItem.GetPowerInfo(pid)
 							if pinfo and pinfo.spellID then
+								--print('Azerite found:', pinfo.azeritePowerID, GetSpellInfo(pinfo.spellID))
 								self.traits[pinfo.spellID] = self.traits[pid]
 							end
 						end
@@ -1251,6 +1266,7 @@ end
 
 function Player:UpdateAbilities()
 	self.focus_max = UnitPowerMax('player', 2)
+
 	local _, ability
 
 	for _, ability in next, abilities.all do
@@ -1335,11 +1351,12 @@ end
 function Target:UpdateHealth()
 	timer.health = 0
 	self.health = UnitHealth('target')
+	self.health_max = UnitHealthMax('target')
 	table.remove(self.healthArray, 1)
-	self.healthArray[15] = self.health
-	self.timeToDieMax = self.health / UnitHealthMax('player') * 15
-	self.healthPercentage = self.healthMax > 0 and (self.health / self.healthMax * 100) or 100
-	self.healthLostPerSec = (self.healthArray[1] - self.health) / 3
+	self.healthArray[25] = self.health
+	self.timeToDieMax = self.health / Player.health_max * 15
+	self.healthPercentage = self.health_max > 0 and (self.health / self.health_max * 100) or 100
+	self.healthLostPerSec = (self.healthArray[1] - self.health) / 5
 	self.timeToDie = self.healthLostPerSec > 0 and min(self.timeToDieMax, self.health / self.healthLostPerSec) or self.timeToDieMax
 end
 
@@ -1356,14 +1373,13 @@ function Target:Update()
 		self.classification = 'normal'
 		self.player = false
 		self.level = UnitLevel('player')
-		self.healthMax = 0
 		self.hostile = true
 		local i
-		for i = 1, 15 do
+		for i = 1, 25 do
 			self.healthArray[i] = 0
 		end
+		self:UpdateHealth()
 		if Opt.always_on then
-			self:UpdateHealth()
 			UI:UpdateCombat()
 			ghPanel:Show()
 			return true
@@ -1376,7 +1392,7 @@ function Target:Update()
 	if guid ~= self.guid then
 		self.guid = guid
 		local i
-		for i = 1, 15 do
+		for i = 1, 25 do
 			self.healthArray[i] = UnitHealth('target')
 		end
 	end
@@ -1385,18 +1401,17 @@ function Target:Update()
 	self.classification = UnitClassification('target')
 	self.player = UnitIsPlayer('target')
 	self.level = UnitLevel('target')
-	self.healthMax = UnitHealthMax('target')
 	self.hostile = UnitCanAttack('player', 'target') and not UnitIsDead('target')
+	self:UpdateHealth()
 	if not self.player and self.classification ~= 'minus' and self.classification ~= 'normal' then
 		if self.level == -1 or (Player.instance == 'party' and self.level >= UnitLevel('player') + 2) then
 			self.boss = true
 			self.stunnable = false
-		elseif Player.instance == 'raid' or (self.healthMax > Player.health_max * 10) then
+		elseif Player.instance == 'raid' or (self.health_max > Player.health_max * 10) then
 			self.stunnable = false
 		end
 	end
 	if self.hostile or Opt.always_on then
-		self:UpdateHealth()
 		UI:UpdateCombat()
 		ghPanel:Show()
 		return true
@@ -2380,13 +2395,13 @@ function UI:UpdateDisplay()
 	if Player.wait_time then
 		local deficit = Player.wait_time - GetTime()
 		if deficit > 0 then
-			ghPanel.text.center:SetText(format('WAIT %.1fs', deficit))
-			text_center = true
+			text_center = format('WAIT %.1fs', deficit)
 			dim = Opt.dimmer
 		end
 	end
 	ghPanel.dimmer:SetShown(dim)
-	ghPanel.text.center:SetShown(text_center)
+	ghPanel.text.center:SetText(text_center)
+	--ghPanel.text.bl:SetText(format('%.1fs', Target.timeToDie))
 end
 
 function UI:UpdateCombat()
@@ -2414,6 +2429,7 @@ function UI:UpdateCombat()
 		Player.focus = Player.focus - Player.ability_casting:Cost()
 	end
 	Player.focus = min(max(Player.focus, 0), Player.focus_max)
+	Player.moving = GetUnitSpeed('player') ~= 0
 	Player:UpdatePet()
 
 	trackAuras:Purge()
@@ -2489,7 +2505,7 @@ function events:ADDON_LOADED(name)
 		Opt = GoodHunting
 		if not Opt.frequency then
 			print('It looks like this is your first time running ' .. name .. ', why don\'t you take some time to familiarize yourself with the commands?')
-			print('Type |cFFFFD000' .. SLASH_Braindead1 .. '|r for a list of commands.')
+			print('Type |cFFFFD000' .. SLASH_GoodHunting1 .. '|r for a list of commands.')
 		end
 		if UnitLevel('player') < 110 then
 			print('[|cFFFFD000Warning|r] ' .. name .. ' is not designed for players under level 110, and almost certainly will not operate properly!')
@@ -2595,9 +2611,6 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			ability:RefreshAura(dstGUID)
 		elseif eventType == 'SPELL_AURA_REMOVED' then
 			ability:RemoveAura(dstGUID)
-		end
-		if ability == Outbreak then
-			VirulentPlague:RefreshAuraAll()
 		end
 	end
 	if Opt.auto_aoe then
@@ -2724,12 +2737,6 @@ end
 function events:SPELL_UPDATE_ICON()
 	if WildfireInfusion.known then
 		WildfireInfusion:Update()
-	end
-end
-
-function events:UNIT_POWER_UPDATE(srcName, powerType)
-	if srcName == 'player' and powerType == 'RUNIC_POWER' then
-		UI:UpdateCombatWithin(0.05)
 	end
 end
 
@@ -2863,7 +2870,7 @@ function SlashCmdList.GoodHunting(msg, editbox)
 			end
 			UI.OnResourceFrameShow()
 		end
-		return Status('Snap to Blizzard combat resources frame', Opt.snap)
+		return Status('Snap to the Personal Resource Display frame', Opt.snap)
 	end
 	if msg[1] == 'scale' then
 		if startsWith(msg[2], 'prev') then
@@ -3088,7 +3095,7 @@ function SlashCmdList.GoodHunting(msg, editbox)
 	local _, cmd
 	for _, cmd in next, {
 		'locked |cFF00C000on|r/|cFFC00000off|r - lock the Good Hunting UI so that it can\'t be moved',
-		'snap |cFF00C000above|r/|cFF00C000below|r/|cFFC00000off|r - snap the Good Hunting UI to the Blizzard combat resources frame',
+		'snap |cFF00C000above|r/|cFF00C000below|r/|cFFC00000off|r - snap the Good Hunting UI to the Personal Resource Display',
 		'scale |cFFFFD000prev|r/|cFFFFD000main|r/|cFFFFD000cd|r/|cFFFFD000interrupt|r/|cFFFFD000extra|r/|cFFFFD000glow|r - adjust the scale of the Good Hunting UI icons',
 		'alpha |cFFFFD000[percent]|r - adjust the transparency of the Good Hunting UI icons',
 		'frequency |cFFFFD000[number]|r - set the calculation frequency (default is every 0.2 seconds)',
