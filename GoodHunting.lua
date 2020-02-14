@@ -964,6 +964,11 @@ local VenomousFangs = Ability:Add(274590, false, true)
 local WildernessSurvival = Ability:Add(278532, false, true)
 -- Heart of Azeroth
 ---- Major Essences
+local BloodOfTheEnemy = Ability:Add(298277, false, true)
+BloodOfTheEnemy.buff_duration = 10
+BloodOfTheEnemy.cooldown_duration = 120
+BloodOfTheEnemy.essence_id = 23
+BloodOfTheEnemy.essence_major = true
 local ConcentratedFlame = Ability:Add(295373, true, true, 295378)
 ConcentratedFlame.buff_duration = 180
 ConcentratedFlame.cooldown_duration = 30
@@ -994,6 +999,10 @@ PurifyingBlast.cooldown_duration = 60
 PurifyingBlast.essence_id = 6
 PurifyingBlast.essence_major = true
 PurifyingBlast:AutoAoe(true)
+local ReapingFlames = Ability:Add(311195, false, true)
+ReapingFlames.cooldown_duration = 45
+ReapingFlames.essence_id = 35
+ReapingFlames.essence_major = true
 local RippleInSpace = Ability:Add(302731, true, true)
 RippleInSpace.buff_duration = 2
 RippleInSpace.cooldown_duration = 60
@@ -1035,6 +1044,8 @@ RealityShift.essence_id = 15
 local RecklessForce = Ability:Add(302932, true, true)
 RecklessForce.buff_duration = 3
 RecklessForce.essence_id = 28
+RecklessForce.counter = Ability:Add(302917, true, true)
+RecklessForce.counter.essence_id = 28
 local StriveForPerfection = Ability:Add(299369, true, true)
 StriveForPerfection.essence_id = 22
 -- Racials
@@ -1217,6 +1228,10 @@ function Player:FocusTimeToMax()
 		return 0
 	end
 	return deficit / self.focus_regen
+end
+
+function Player:HasteFactor()
+	return self.haste_factor
 end
 
 function Player:TimeInCombat()
@@ -1619,6 +1634,15 @@ actions.cds+=/memory_of_lucid_dreams
 	if Opt.pot and Target.boss and SuperiorBattlePotionOfAgility:Usable() and (BestialWrath:Up() and AspectOfTheWild:Up() and (Target.healthPercentage < 35 or not KillerInstinct.known) or Target.timeToDie < 25) then
 		UseCooldown(SuperiorBattlePotionOfAgility)
 	end
+	if WorldveinResonance:Usable() and Lifeblood:Stack() < 4 then
+		UseCooldown(WorldveinResonance)
+	elseif GuardianOfAzeroth:Usable() then
+		UseCooldown(GuardianOfAzeroth)
+	elseif RippleInSpace:Usable() then
+		UseCooldown(RippleInSpace)
+	elseif MemoryOfLucidDreams:Usable() then
+		UseCooldown(MemoryOfLucidDreams)
+	end
 end
 
 APL[SPEC.BEASTMASTERY].st = function(self)
@@ -1636,6 +1660,7 @@ actions.st+=/focused_azerite_beam
 actions.st+=/purifying_blast
 actions.st+=/concentrated_flame
 actions.st+=/blood_of_the_enemy
+actions.st+=/reaping_flames
 actions.st+=/the_unbound_force,if=buff.reckless_force.up|buff.reckless_force_counter.stack<10
 actions.st+=/barrage
 actions.st+=/cobra_shot,if=(focus-cost+focus.regen*(cooldown.kill_command.remains-1)>action.kill_command.cost|cooldown.kill_command.remains>1+gcd|buff.memory_of_lucid_dreams.up)&cooldown.kill_command.remains>1
@@ -1669,8 +1694,18 @@ actions.st+=/barbed_shot,if=charges_fractional>1.4
 	if BarbedShot:Usable() and ((PetFrenzy:Down() and (BarbedShot:ChargesFractional() > 1.8 or BestialWrath:Up())) or (PrimalInstincts.known and AspectOfTheWild:Ready(PetFrenzy:Duration() - Player.gcd)) or (DanceOfDeath:AzeriteRank() > 1 and DanceOfDeath:Down() and GetCritChance() > 40) or Target.timeToDie < 9) then
 		return BarbedShot
 	end
-	if ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
-		return ConcentratedFlame
+	if FocusedAzeriteBeam:Usable() and (BarbedShot:Down() or BarbedShot:Remains() > (4.5 * Player:HasteFactor())) then
+		UseCooldown(FocusedAzeriteBeam)
+	elseif PurifyingBlast:Usable() then
+		UseCooldown(PurifyingBlast)
+	elseif ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
+		UseCooldown(ConcentratedFlame)
+	elseif BloodOfTheEnemy:Usable() then
+		UseCooldown(BloodOfTheEnemy)
+	elseif TheUnboundForce:Usable() and (RecklessForce:Up() or RecklessForce.counter:Stack() < 10) then
+		UseCooldown(TheUnboundForce)
+	elseif ReapingFlames:Usable() then
+		UseCooldown(ReapingFlames)
 	end
 	if Barrage:Usable() then
 		return Barrage
@@ -1704,6 +1739,7 @@ actions.cleave+=/focused_azerite_beam
 actions.cleave+=/purifying_blast
 actions.cleave+=/concentrated_flame
 actions.cleave+=/blood_of_the_enemy
+actions.cleave+=/reaping_flames
 actions.cleave+=/the_unbound_force,if=buff.reckless_force.up|buff.reckless_force_counter.stack<10
 actions.cleave+=/multishot,if=azerite.rapid_reload.enabled&active_enemies>2
 actions.cleave+=/cobra_shot,if=cooldown.kill_command.remains>focus.time_to_max&(active_enemies<3|!azerite.rapid_reload.enabled)
@@ -1745,8 +1781,18 @@ actions.cleave+=/spitting_cobra
 	if BarbedShot:Usable() and ((PetFrenzy:Down() and (BarbedShot:ChargesFractional() > 1.8 or BestialWrath:Up())) or (PrimalInstincts.known and AspectOfTheWild:Ready(PetFrenzy:Duration() - Player.gcd)) or BarbedShot:ChargesFractional() > 1.4 or Target.timeToDie < 9) then
 		return BarbedShot
 	end
-	if ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
-		return ConcentratedFlame
+	if FocusedAzeriteBeam:Usable() and MultiShotBM:Previous() and (BarbedShot:Down() or BarbedShot:Remains() > (4.5 * Player:HasteFactor())) then
+		UseCooldown(FocusedAzeriteBeam)
+	elseif PurifyingBlast:Usable() then
+		UseCooldown(PurifyingBlast)
+	elseif ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
+		UseCooldown(ConcentratedFlame)
+	elseif BloodOfTheEnemy:Usable() then
+		UseCooldown(BloodOfTheEnemy)
+	elseif TheUnboundForce:Usable() and (RecklessForce:Up() or RecklessForce.counter:Stack() < 10) then
+		UseCooldown(TheUnboundForce)
+	elseif ReapingFlames:Usable() then
+		UseCooldown(ReapingFlames)
 	end
 	if RapidReload.known and MultiShotBM:Usable() and Player.enemies > 2 then
 		return MultiShotBM
