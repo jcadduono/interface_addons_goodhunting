@@ -2350,6 +2350,9 @@ actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
 	if SerpentSting:Usable() and SerpentSting:Refreshable() and (LatentPoison.known or (VolatileBomb.next and (not TipOfTheSpear.known or TipOfTheSpear:Stack() < 3))) then
 		return SerpentSting
 	end
+	if SerpentSting:Usable() and HydrasBite.known and VolatileBomb.next and SerpentSting:Ticking() < Player.enemies and WildfireBomb:Ready(6 * Player.gcd) then
+		return SerpentSting
+	end
 	if MongooseBite:Usable() then
 		return MongooseBite
 	end
@@ -2846,6 +2849,9 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 		end
 	end
 	if eventType == 'SPELL_ABSORBED' or eventType == 'SPELL_MISSED' or eventType == 'SPELL_DAMAGE' or eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
+		if ability == VolatileBomb and eventType == 'SPELL_AURA_APPLIED' and SerpentSting.aura_targets[dstGUID] then
+			SerpentSting:RefreshAura(dstGUID)
+		end
 		if ability.travel_start and ability.travel_start[dstGUID] then
 			ability.travel_start[dstGUID] = nil
 		end
