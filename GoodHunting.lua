@@ -802,6 +802,7 @@ KillCommandBM.focus_cost = 30
 KillCommandBM.cooldown_duration = 7.5
 KillCommandBM.hasted_cooldown = true
 KillCommandBM.requires_pet = true
+KillCommandBM.max_range = 50
 local MultiShotBM = Ability:Add(2643, false, true)
 MultiShotBM.focus_cost = 40
 MultiShotBM:SetVelocity(50)
@@ -843,6 +844,7 @@ Stomp:AutoAoe(true)
 ---- Survival
 local Carve = Ability:Add(187708, false, true)
 Carve.focus_cost = 35
+Carve.max_range = 5
 Carve:AutoAoe(true)
 local CoordinatedAssault = Ability:Add(266779, true, true)
 CoordinatedAssault.cooldown_duration = 120
@@ -852,7 +854,7 @@ local Harpoon = Ability:Add(190925, false, true, 190927)
 Harpoon.cooldown_duration = 20
 Harpoon.buff_duration = 3
 Harpoon.triggers_gcd = false
-Harpoon:SetVelocity(70)
+Harpoon.max_range = 30
 local Intimidation = Ability:Add(19577, false, true)
 Intimidation.cooldown_duration = 60
 Intimidation.buff_duration = 5
@@ -863,11 +865,14 @@ KillCommand.cooldown_duration = 6
 KillCommand.hasted_cooldown = true
 KillCommand.requires_charge = true
 KillCommand.requires_pet = true
+KillCommand.max_range = 50
 local Muzzle = Ability:Add(187707, false, true)
 Muzzle.cooldown_duration = 15
+Muzzle.max_range = 5
 Muzzle.triggers_gcd = false
 local RaptorStrike = Ability:Add(186270, false, true)
 RaptorStrike.focus_cost = 30
+RaptorStrike.max_range = 5
 local SerpentSting = Ability:Add(259491, false, true)
 SerpentSting.focus_cost = 20
 SerpentSting.buff_duration = 12
@@ -883,7 +888,7 @@ WildfireBomb.buff_duration = 6
 WildfireBomb.tick_interval = 1
 WildfireBomb.hasted_cooldown = true
 WildfireBomb.requires_charge = true
-WildfireBomb:SetVelocity(35)
+WildfireBomb:SetVelocity(30)
 WildfireBomb:AutoAoe(true)
 ------ Talents
 local AlphaPredator = Ability:Add(269737, false, true)
@@ -907,11 +912,13 @@ local FlankingStrike = Ability:Add(269751, false, true)
 FlankingStrike.focus_cost = -30
 FlankingStrike.cooldown_duration = 40
 FlankingStrike.requires_pet = true
+FlankingStrike.max_range = 5
 local GuerrillaTactics = Ability:Add(264332, false, true)
 local HydrasBite = Ability:Add(260241, false, true)
 local InternalBleeding = Ability:Add(270343, false, true) -- Shrapnel Bomb DoT applied by Raptor Strike/Mongoose Bite/Carve
 local MongooseBite = Ability:Add(259387, false, true)
 MongooseBite.focus_cost = 30
+MongooseBite.max_range = 5
 local MongooseFury = Ability:Add(259388, true, true)
 MongooseFury.buff_duration = 14
 local PheromoneBomb = Ability:Add(270323, false, true, 270332) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
@@ -920,7 +927,7 @@ PheromoneBomb.buff_duration = 6
 PheromoneBomb.tick_interval = 1
 PheromoneBomb.hasted_cooldown = true
 PheromoneBomb.requires_charge = true
-PheromoneBomb:SetVelocity(35)
+PheromoneBomb:SetVelocity(30)
 PheromoneBomb:AutoAoe(true)
 local Predator = Ability:Add(260249, true, true) -- Bloodseeker buff
 local ShrapnelBomb = Ability:Add(270335, false, true, 270339) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
@@ -929,7 +936,7 @@ ShrapnelBomb.buff_duration = 6
 ShrapnelBomb.tick_interval = 1
 ShrapnelBomb.hasted_cooldown = true
 ShrapnelBomb.requires_charge = true
-ShrapnelBomb:SetVelocity(35)
+ShrapnelBomb:SetVelocity(30)
 ShrapnelBomb:AutoAoe()
 ShrapnelBomb:TrackAuras(true)
 local SteelTrap = Ability:Add(162488, false, true, 162487)
@@ -949,7 +956,7 @@ VolatileBomb.buff_duration = 6
 VolatileBomb.tick_interval = 1
 VolatileBomb.hasted_cooldown = true
 VolatileBomb.requires_charge = true
-VolatileBomb:SetVelocity(35)
+VolatileBomb:SetVelocity(30)
 VolatileBomb:AutoAoe(true)
 local WildfireInfusion = Ability:Add(271014, false, true)
 ------ Procs
@@ -2810,6 +2817,9 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			end
 			if ability.travel_start then
 				ability.travel_start[dstGUID] = Player.time
+				if not ability.range_est_start then
+					ability.range_est_start = Player.time
+				end
 			end
 			if Opt.previous and ghPanel:IsVisible() then
 				ghPreviousPanel.ability = ability
@@ -2854,6 +2864,14 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 		end
 		if ability.travel_start and ability.travel_start[dstGUID] then
 			ability.travel_start[dstGUID] = nil
+		end
+		if ability == Harpoon then
+			Target.estimated_range = 5
+		elseif ability.range_est_start then
+			Target.estimated_range = floor(max(5, min(ability.max_range, ability.velocity * (Player.time - ability.range_est_start))))
+			ability.range_est_start = nil
+		elseif ability.max_range < Target.estimated_range then
+			Target.estimated_range = ability.max_range
 		end
 		if Opt.previous and Opt.miss_effect and eventType == 'SPELL_MISSED' and ghPanel:IsVisible() and ability == ghPreviousPanel.ability then
 			ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\misseffect.blp')
