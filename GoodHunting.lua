@@ -2134,7 +2134,7 @@ actions.wfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|n
 	if SerpentSting:Usable() and (SerpentSting:Down() or (VipersVenom.known and VipersVenom:Up() and VipersVenom:Remains() < (1.5 * Player.gcd))) then
 		return SerpentSting
 	end
-	if WildfireBomb:Usable() and ((WildfireBomb:WontCapFocus() and WildfireBomb:FullRechargeTime() < (1.5 * Player.gcd)) or (VolatileBomb.next and SerpentSting:Up() and SerpentSting:Refreshable()) or (PheromoneBomb.next and not MongooseFury:Up() and WildfireBomb:WontCapFocus(KillCommand:CastRegen() * 3))) then
+	if WildfireBomb:Usable() and ((WildfireBomb:WontCapFocus() and WildfireBomb:FullRechargeTime() < (1.5 * Player.gcd)) or (VolatileBomb.next and SerpentSting:Remains() > WildfireBomb:TravelTime() and SerpentSting:Refreshable()) or (PheromoneBomb.next and not MongooseFury:Up() and WildfireBomb:WontCapFocus(KillCommand:CastRegen() * 3))) then
 		return WildfireBomb
 	end
 	if KillCommand:Usable() and KillCommand:WontCapFocus(Player.focus_regen) then
@@ -2176,7 +2176,7 @@ actions.wfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|n
 	if VipersVenom.known and SerpentSting:Usable() and VipersVenom:Up() then
 		return SerpentSting
 	end
-	if WildfireBomb:Usable() and ((VolatileBomb.next and SerpentSting:Up()) or PheromoneBomb.next or ShrapnelBomb.next) then
+	if WildfireBomb:Usable() and ((VolatileBomb.next and SerpentSting:Remains() > WildfireBomb:TravelTime()) or PheromoneBomb.next or ShrapnelBomb.next) then
 		return WildfireBomb
 	end
 	if ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
@@ -2219,7 +2219,7 @@ actions.apwfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking
 	if AMurderOfCrows:Usable() then
 		UseCooldown(AMurderOfCrows)
 	end
-	if WildfireBomb:Usable() and (WildfireBomb:FullRechargeTime() < (1.5 * Player.gcd) or (WildfireBomb:WontCapFocus() and ((VolatileBomb.next and SerpentSting:Up() and SerpentSting:Refreshable()) or (PheromoneBomb.next and not MongooseFury:Up() and WildfireBomb:WontCapFocus(KillCommand:CastRegen() * 3))))) then
+	if WildfireBomb:Usable() and (WildfireBomb:FullRechargeTime() < (1.5 * Player.gcd) or (WildfireBomb:WontCapFocus() and ((VolatileBomb.next and SerpentSting:Remains() > WildfireBomb:TravelTime() and SerpentSting:Refreshable()) or (PheromoneBomb.next and not MongooseFury:Up() and WildfireBomb:WontCapFocus(KillCommand:CastRegen() * 3))))) then
 		return WildfireBomb
 	end
 	if CoordinatedAssault:Usable() then
@@ -2258,7 +2258,7 @@ actions.apwfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking
 	if MongooseBite:Usable() and (MongooseFury:Up() or Player:Focus() > 40) then
 		return MongooseBite
 	end
-	if WildfireBomb:Usable() and ((VolatileBomb.next and SerpentSting:Up()) or PheromoneBomb.next or (ShrapnelBomb.next and Player:Focus() > 50)) then
+	if WildfireBomb:Usable() and ((VolatileBomb.next and SerpentSting:Remains() > WildfireBomb:TravelTime()) or PheromoneBomb.next or (ShrapnelBomb.next and Player:Focus() > 50)) then
 		return WildfireBomb
 	end
 	if ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
