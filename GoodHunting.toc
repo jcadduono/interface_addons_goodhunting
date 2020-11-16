@@ -1,7 +1,7 @@
-## Interface: 80300
+## Interface: 90001
 ## Title: Good Hunting
 ## Notes: Good Hunting is an addon for hunters that simplifies gameplay and maximizes DPS by doing all the decision making for you
 ## Author: jcadduono @ curseforge.com or Spy#1955 @ BattleTag
 ## SavedVariablesPerCharacter: GoodHunting
-## Version: 8.3.7-2
+## Version: 9.0.1-0
 GoodHunting.lua

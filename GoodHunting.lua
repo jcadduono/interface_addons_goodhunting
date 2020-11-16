@@ -878,7 +878,6 @@ SerpentSting.focus_cost = 20
 SerpentSting.buff_duration = 12
 SerpentSting.tick_interval = 3
 SerpentSting.hasted_ticks = true
-SerpentSting.hasted_duration = true
 SerpentSting:SetVelocity(60)
 SerpentSting:TrackAuras()
 SerpentSting:AutoAoe()
@@ -1165,10 +1164,6 @@ function Azerite:Update()
 	end
 	for pid in next, self.essences do
 		self.essences[pid] = nil
-	end
-	if UnitEffectiveLevel('player') < 110 then
-		print('disabling azerite, player is effectively level', UnitEffectiveLevel('player'))
-		return -- disable all Azerite/Essences for players scaled under 110
 	end
 	for _, loc in next, self.locations do
 		if GetInventoryItemID('player', loc:GetEquipmentSlot()) and C_AzeriteEmpoweredItem.IsAzeriteEmpoweredItem(loc) then
@@ -2741,8 +2736,8 @@ function events:ADDON_LOADED(name)
 			print('It looks like this is your first time running ' .. name .. ', why don\'t you take some time to familiarize yourself with the commands?')
 			print('Type |cFFFFD000' .. SLASH_GoodHunting1 .. '|r for a list of commands.')
 		end
-		if UnitLevel('player') < 110 then
-			print('[|cFFFFD000Warning|r] ' .. name .. ' is not designed for players under level 110, and almost certainly will not operate properly!')
+		if UnitLevel('player') < 10 then
+			print('[|cFFFFD000Warning|r] ' .. name .. ' is not designed for players under level 10, and almost certainly will not operate properly!')
 		end
 		InitOpts()
 		Azerite:Init()
