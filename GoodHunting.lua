@@ -1,7 +1,9 @@
+local ADDON = 'GoodHunting'
 if select(2, UnitClass('player')) ~= 'HUNTER' then
-	DisableAddOn('GoodHunting')
+	DisableAddOn(ADDON)
 	return
 end
+local ADDON_PATH = 'Interface\\AddOns\\' .. ADDON .. '\\'
 
 -- copy heavily accessed global functions into local scope for performance
 local GetSpellCooldown = _G.GetSpellCooldown
@@ -28,7 +30,7 @@ GoodHunting = {}
 local Opt -- use this as a local table reference to GoodHunting
 
 SLASH_GoodHunting1, SLASH_GoodHunting2 = '/gh', '/good'
-BINDING_HEADER_GOODHUNTING = 'Good Hunting'
+BINDING_HEADER_GOODHUNTING = ADDON
 
 local function InitOpts()
 	local function SetDefaults(t, ref)
@@ -86,6 +88,7 @@ local function InitOpts()
 		aoe = false,
 		auto_aoe = false,
 		auto_aoe_ttl = 10,
+		cd_ttd = 8,
 		pot = false,
 		trinket = true,
 		mend_threshold = 65,
@@ -129,6 +132,9 @@ local Player = {
 	focus = 0,
 	focus_regen = 0,
 	focus_max = 100,
+	moving = false,
+	movement_speed = 100,
+	last_swing_taken = 0,
 	previous_gcd = {},-- list of previous GCD abilities
 	item_use_blacklist = { -- list of item IDs with on-use effects we should mark unusable
 		[174044] = true, -- Humming Black Dragonscale (parachute)
@@ -139,13 +145,10 @@ local Player = {
 local Target = {
 	boss = false,
 	guid = 0,
-	healthArray = {},
+	health_array = {},
 	hostile = false,
 	estimated_range = 30,
 }
-
--- Azerite trait API access
-local Azerite = {}
 
 local ghPanel = CreateFrame('Frame', 'ghPanel', UIParent)
 ghPanel:SetPoint('CENTER', 0, -169)
@@ -158,7 +161,7 @@ ghPanel.icon:SetAllPoints(ghPanel)
 ghPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
 ghPanel.border = ghPanel:CreateTexture(nil, 'ARTWORK')
 ghPanel.border:SetAllPoints(ghPanel)
-ghPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
+ghPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 ghPanel.border:Hide()
 ghPanel.dimmer = ghPanel:CreateTexture(nil, 'BORDER')
 ghPanel.dimmer:SetAllPoints(ghPanel)
@@ -205,7 +208,7 @@ ghPreviousPanel.icon:SetAllPoints(ghPreviousPanel)
 ghPreviousPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
 ghPreviousPanel.border = ghPreviousPanel:CreateTexture(nil, 'ARTWORK')
 ghPreviousPanel.border:SetAllPoints(ghPreviousPanel)
-ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
+ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 local ghCooldownPanel = CreateFrame('Frame', 'ghCooldownPanel', UIParent)
 ghCooldownPanel:SetSize(64, 64)
 ghCooldownPanel:SetFrameStrata('BACKGROUND')
@@ -219,7 +222,7 @@ ghCooldownPanel.icon:SetAllPoints(ghCooldownPanel)
 ghCooldownPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
 ghCooldownPanel.border = ghCooldownPanel:CreateTexture(nil, 'ARTWORK')
 ghCooldownPanel.border:SetAllPoints(ghCooldownPanel)
-ghCooldownPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
+ghCooldownPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 ghCooldownPanel.cd = CreateFrame('Cooldown', nil, ghCooldownPanel, 'CooldownFrameTemplate')
 ghCooldownPanel.cd:SetAllPoints(ghCooldownPanel)
 local ghInterruptPanel = CreateFrame('Frame', 'ghInterruptPanel', UIParent)
@@ -235,7 +238,7 @@ ghInterruptPanel.icon:SetAllPoints(ghInterruptPanel)
 ghInterruptPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
 ghInterruptPanel.border = ghInterruptPanel:CreateTexture(nil, 'ARTWORK')
 ghInterruptPanel.border:SetAllPoints(ghInterruptPanel)
-ghInterruptPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
+ghInterruptPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 ghInterruptPanel.cast = CreateFrame('Cooldown', nil, ghInterruptPanel, 'CooldownFrameTemplate')
 ghInterruptPanel.cast:SetAllPoints(ghInterruptPanel)
 local ghExtraPanel = CreateFrame('Frame', 'ghExtraPanel', UIParent)
@@ -251,7 +254,7 @@ ghExtraPanel.icon:SetAllPoints(ghExtraPanel)
 ghExtraPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
 ghExtraPanel.border = ghExtraPanel:CreateTexture(nil, 'ARTWORK')
 ghExtraPanel.border:SetAllPoints(ghExtraPanel)
-ghExtraPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
+ghExtraPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 -- Beast Mastery Pet Frenzy stacks and duration remaining on extra icon
 ghExtraPanel.frenzy = CreateFrame('Cooldown', nil, ghExtraPanel, 'CooldownFrameTemplate')
 ghExtraPanel.frenzy:SetAllPoints(ghExtraPanel)
@@ -272,19 +275,19 @@ Player.target_modes = {
 		{1, ''},
 		{2, '2'},
 		{3, '3'},
-		{4, '4+'}
+		{4, '4+'},
 	},
 	[SPEC.MARKSMANSHIP] = {
 		{1, ''},
 		{2, '2'},
 		{3, '3'},
-		{4, '4+'}
+		{4, '4+'},
 	},
 	[SPEC.SURVIVAL] = {
 		{1, ''},
 		{2, '2'},
 		{3, '3'},
-		{4, '4+'}
+		{4, '4+'},
 	},
 }
 
@@ -329,7 +332,6 @@ local autoAoe = {
 	blacklist = {},
 	ignored_units = {
 		[120651] = true, -- Explosives (Mythic+ affix)
-		[161895] = true, -- Thing From Beyond (40+ Corruption)
 	},
 }
 
@@ -433,6 +435,7 @@ function Ability:Add(spellId, buff, player, spellId2)
 		tick_interval = 0,
 		max_range = 40,
 		velocity = 0,
+		last_used = 0,
 		auraTarget = buff and 'player' or 'target',
 		auraFilter = (buff and 'HELPFUL' or 'HARMFUL') .. (player and '|PLAYER' or '')
 	}
@@ -456,7 +459,7 @@ function Ability:Ready(seconds)
 	return self:Cooldown() <= (seconds or 0)
 end
 
-function Ability:Usable()
+function Ability:Usable(seconds)
 	if not self.known then
 		return false
 	end
@@ -469,7 +472,7 @@ function Ability:Usable()
 	if self.requires_charge and self:Charges() == 0 then
 		return false
 	end
-	return self:Ready()
+	return self:Ready(seconds)
 end
 
 function Ability:Remains()
@@ -481,8 +484,7 @@ function Ability:Remains()
 		_, _, _, _, _, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
 		if not id then
 			return 0
-		end
-		if self:Match(id) then
+		elseif self:Match(id) then
 			if expires == 0 then
 				return 600 -- infinite duration
 			end
@@ -499,12 +501,12 @@ function Ability:Refreshable()
 	return self:Down()
 end
 
-function Ability:Up()
-	return self:Remains() > 0
+function Ability:Up(condition)
+	return self:Remains(condition) > 0
 end
 
-function Ability:Down()
-	return not self:Up()
+function Ability:Down(condition)
+	return self:Remains(condition) <= 0
 end
 
 function Ability:SetVelocity(velocity)
@@ -568,8 +570,7 @@ function Ability:Stack()
 		_, _, count, _, _, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
 		if not id then
 			return 0
-		end
-		if self:Match(id) then
+		elseif self:Match(id) then
 			return (expires == 0 or expires - Player.ctime > Player.execute_remains) and count or 0
 		end
 	end
@@ -642,10 +643,6 @@ function Ability:Previous(n)
 		i = i - 1
 	end
 	return Player.previous_gcd[i] == self
-end
-
-function Ability:AzeriteRank()
-	return Azerite.traits[self.spellId] or 0
 end
 
 function Ability:AutoAoe(removeUnaffected, trigger)
@@ -960,109 +957,18 @@ VolatileBomb:AutoAoe(true)
 local WildfireInfusion = Ability:Add(271014, false, true)
 ------ Procs
 
--- Azerite Traits
-local BlurOfTalons = Ability:Add(277653, true, true, 277969)
-BlurOfTalons.buff_duration = 6
-local DanceOfDeath = Ability:Add(274441, true, true, 274443)
-DanceOfDeath.buff_duration = 8
-local LatentPoison = Ability:Add(273283, true, true, 273286)
-LatentPoison.buff_duration = 20
-local PrimalInstincts = Ability:Add(279806, true, true, 279810)
-PrimalInstincts.buff_duration = 20
-local RapidReload = Ability:Add(278530, true, true)
-local VenomousFangs = Ability:Add(274590, false, true)
-local WildernessSurvival = Ability:Add(278532, false, true)
--- Heart of Azeroth
----- Major Essences
-local BloodOfTheEnemy = Ability:Add({297108, 298273, 298277} , false, true)
-BloodOfTheEnemy.buff_duration = 10
-BloodOfTheEnemy.cooldown_duration = 120
-BloodOfTheEnemy.essence_id = 23
-BloodOfTheEnemy.essence_major = true
-BloodOfTheEnemy:AutoAoe(true)
-local ConcentratedFlame = Ability:Add({295373, 299349, 299353}, true, true, 295378)
-ConcentratedFlame.buff_duration = 180
-ConcentratedFlame.cooldown_duration = 30
-ConcentratedFlame.requires_charge = true
-ConcentratedFlame.essence_id = 12
-ConcentratedFlame.essence_major = true
-ConcentratedFlame:SetVelocity(40)
-ConcentratedFlame.dot = Ability:Add(295368, false, true)
-ConcentratedFlame.dot.buff_duration = 6
-ConcentratedFlame.dot.tick_interval = 2
-ConcentratedFlame.dot.essence_id = 12
-ConcentratedFlame.dot.essence_major = true
-local GuardianOfAzeroth = Ability:Add({295840, 299355, 299358}, false, true)
-GuardianOfAzeroth.cooldown_duration = 180
-GuardianOfAzeroth.essence_id = 14
-GuardianOfAzeroth.essence_major = true
-local FocusedAzeriteBeam = Ability:Add({295258, 299336, 299338}, false, true)
-FocusedAzeriteBeam.cooldown_duration = 90
-FocusedAzeriteBeam.essence_id = 5
-FocusedAzeriteBeam.essence_major = true
-FocusedAzeriteBeam:AutoAoe()
-local MemoryOfLucidDreams = Ability:Add({298357, 299372, 299374}, true, true)
-MemoryOfLucidDreams.buff_duration = 15
-MemoryOfLucidDreams.cooldown_duration = 120
-MemoryOfLucidDreams.essence_id = 27
-MemoryOfLucidDreams.essence_major = true
-local PurifyingBlast = Ability:Add({295337, 299345, 299347}, false, true, 295338)
-PurifyingBlast.cooldown_duration = 60
-PurifyingBlast.essence_id = 6
-PurifyingBlast.essence_major = true
-PurifyingBlast:AutoAoe(true)
-local ReapingFlames = Ability:Add({310690, 311194, 311195}, false, true)
-ReapingFlames.cooldown_duration = 45
-ReapingFlames.essence_id = 35
-ReapingFlames.essence_major = true
-local RippleInSpace = Ability:Add({302731, 302982, 302983}, true, true)
-RippleInSpace.buff_duration = 2
-RippleInSpace.cooldown_duration = 60
-RippleInSpace.essence_id = 15
-RippleInSpace.essence_major = true
-local TheUnboundForce = Ability:Add({298452, 299376,299378}, false, true)
-TheUnboundForce.cooldown_duration = 45
-TheUnboundForce.essence_id = 28
-TheUnboundForce.essence_major = true
-local VisionOfPerfection = Ability:Add({296325, 299368, 299370}, true, true, 303345)
-VisionOfPerfection.buff_duration = 10
-VisionOfPerfection.essence_id = 22
-VisionOfPerfection.essence_major = true
-local WorldveinResonance = Ability:Add({295186, 298628, 299334}, true, true)
-WorldveinResonance.cooldown_duration = 60
-WorldveinResonance.essence_id = 4
-WorldveinResonance.essence_major = true
----- Minor Essences
-local AncientFlame = Ability:Add(295367, false, true)
-AncientFlame.buff_duration = 10
-AncientFlame.essence_id = 12
-local CondensedLifeForce = Ability:Add(295367, false, true)
-CondensedLifeForce.essence_id = 14
-local FocusedEnergy = Ability:Add(295248, true, true)
-FocusedEnergy.buff_duration = 4
-FocusedEnergy.essence_id = 5
-local Lifeblood = Ability:Add(295137, true, true)
-Lifeblood.essence_id = 4
-local LucidDreams = Ability:Add(298343, true, true)
-LucidDreams.buff_duration = 8
-LucidDreams.essence_id = 27
-local PurificationProtocol = Ability:Add(295305, false, true)
-PurificationProtocol.essence_id = 6
-PurificationProtocol:AutoAoe()
-local RealityShift = Ability:Add(302952, true, true)
-RealityShift.buff_duration = 20
-RealityShift.cooldown_duration = 30
-RealityShift.essence_id = 15
-local RecklessForce = Ability:Add(302932, true, true)
-RecklessForce.buff_duration = 3
-RecklessForce.essence_id = 28
-RecklessForce.counter = Ability:Add(302917, true, true)
-RecklessForce.counter.essence_id = 28
-local StriveForPerfection = Ability:Add(299369, true, true)
-StriveForPerfection.essence_id = 22
+-- Covenant abilities
+local WildSpirits = Ability:Add(328231, false, true)
+WildSpirits.cooldown_duration = 120
+WildSpirits.buff_duration = 15
+-- Soulbind conduits
+
+-- Legendary effects
+local LatentPoisonInjectors = Ability:Add(336902, false, true, 336903)
+LatentPoisonInjectors.buff_duration = 15
+LatentPoisonInjectors.bonus_id = 7017
 -- Racials
-local ArcaneTorrent = Ability:Add(80483, true, false) -- Blood Elf
-ArcaneTorrent.focus_cost = -15
+
 -- Trinket Effects
 
 -- End Abilities
@@ -1143,63 +1049,6 @@ local Trinket1 = InventoryItem:Add(0)
 local Trinket2 = InventoryItem:Add(0)
 -- End Inventory Items
 
--- Start Azerite Trait API
-
-Azerite.equip_slots = { 1, 3, 5 } -- Head, Shoulder, Chest
-
-function Azerite:Init()
-	self.locations = {}
-	self.traits = {}
-	self.essences = {}
-	local i
-	for i = 1, #self.equip_slots do
-		self.locations[i] = ItemLocation:CreateFromEquipmentSlot(self.equip_slots[i])
-	end
-end
-
-function Azerite:Update()
-	local _, loc, slot, pid, pinfo
-	for pid in next, self.traits do
-		self.traits[pid] = nil
-	end
-	for pid in next, self.essences do
-		self.essences[pid] = nil
-	end
-	for _, loc in next, self.locations do
-		if GetInventoryItemID('player', loc:GetEquipmentSlot()) and C_AzeriteEmpoweredItem.IsAzeriteEmpoweredItem(loc) then
-			for _, slot in next, C_AzeriteEmpoweredItem.GetAllTierInfo(loc) do
-				if slot.azeritePowerIDs then
-					for _, pid in next, slot.azeritePowerIDs do
-						if C_AzeriteEmpoweredItem.IsPowerSelected(loc, pid) then
-							self.traits[pid] = 1 + (self.traits[pid] or 0)
-							pinfo = C_AzeriteEmpoweredItem.GetPowerInfo(pid)
-							if pinfo and pinfo.spellID then
-								--print('Azerite found:', pinfo.azeritePowerID, GetSpellInfo(pinfo.spellID))
-								self.traits[pinfo.spellID] = self.traits[pid]
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-	for _, loc in next, C_AzeriteEssence.GetMilestones() or {} do
-		if loc.slot then
-			pid = C_AzeriteEssence.GetMilestoneEssence(loc.ID)
-			if pid then
-				pinfo = C_AzeriteEssence.GetEssenceInfo(pid)
-				self.essences[pid] = {
-					id = pid,
-					rank = pinfo.rank,
-					major = loc.slot == 0,
-				}
-			end
-		end
-	end
-end
-
--- End Azerite Trait API
-
 -- Start Player API
 
 function Player:Health()
@@ -1253,7 +1102,9 @@ function Player:BloodlustActive()
 	local _, i, id
 	for i = 1, 40 do
 		_, _, _, _, _, _, _, _, _, id = UnitAura('player', i, 'HELPFUL')
-		if (
+		if not id then
+			return false
+		elseif (
 			id == 2825 or   -- Bloodlust (Horde Shaman)
 			id == 32182 or  -- Heroism (Alliance Shaman)
 			id == 80353 or  -- Time Warp (Mage)
@@ -1283,6 +1134,24 @@ function Player:Equipped(itemID, slot)
 	return false
 end
 
+function Player:BonusIdEquipped(bonusId)
+	local i, id, link, item
+	for i = 1, 19 do
+		link = GetInventoryItemLink('player', i)
+		if link then
+			item = link:match('Hitem:%d+:([%d:]+)')
+			if item then
+				for id in item:gmatch('(%d+)') do
+					if tonumber(id) == bonusId then
+						return true
+					end
+				end
+			end
+		end
+	end
+	return false
+end
+
 function Player:InArenaOrBattleground()
 	return self.instance == 'arena' or self.instance == 'pvp'
 end
@@ -1290,24 +1159,30 @@ end
 function Player:UpdateAbilities()
 	self.focus_max = UnitPowerMax('player', 2)
 
-	local _, ability, spellId
+	local _, ability, spellId, node
 
 	for _, ability in next, abilities.all do
 		ability.known = false
 		for _, spellId in next, ability.spellIds do
 			ability.spellId, ability.name, _, ability.icon = spellId, GetSpellInfo(spellId)
-			if IsPlayerSpell(spellId) or Azerite.traits[spellId] then
+			if IsPlayerSpell(spellId) then
 				ability.known = true
 				break
 			end
 		end
 		if C_LevelLink.IsSpellLocked(ability.spellId) then
 			ability.known = false -- spell is locked, do not mark as known
-		elseif ability.essence_id and Azerite.essences[ability.essence_id] then
-			if ability.essence_major then
-				ability.known = Azerite.essences[ability.essence_id].major
-			else
-				ability.known = true
+		end
+		if ability.bonus_id then -- used for checking Legendary crafted effects
+			ability.known = self:BonusIdEquipped(ability.bonus_id)
+		end
+		if ability.conduit_id then
+			node = C_Soulbinds.FindNodeIDActuallyInstalled(C_Soulbinds.GetActiveSoulbindID(), ability.conduit_id)
+			if node then
+				node = C_Soulbinds.GetNode(node)
+				if node and node.state == 3 then
+					ability.known = true
+				end
 			end
 		end
 	end
@@ -1377,11 +1252,11 @@ function Target:UpdateHealth()
 	timer.health = 0
 	self.health = UnitHealth('target')
 	self.health_max = UnitHealthMax('target')
-	table.remove(self.healthArray, 1)
-	self.healthArray[25] = self.health
+	table.remove(self.health_array, 1)
+	self.health_array[25] = self.health
 	self.timeToDieMax = self.health / Player.health_max * 15
 	self.healthPercentage = self.health_max > 0 and (self.health / self.health_max * 100) or 100
-	self.healthLostPerSec = (self.healthArray[1] - self.health) / 5
+	self.healthLostPerSec = (self.health_array[1] - self.health) / 5
 	self.timeToDie = self.healthLostPerSec > 0 and min(self.timeToDieMax, self.health / self.healthLostPerSec) or self.timeToDieMax
 end
 
@@ -1401,7 +1276,7 @@ function Target:Update()
 		self.hostile = true
 		local i
 		for i = 1, 25 do
-			self.healthArray[i] = 0
+			self.health_array[i] = 0
 		end
 		self:UpdateHealth()
 		if Opt.always_on then
@@ -1418,7 +1293,7 @@ function Target:Update()
 		self.guid = guid
 		local i
 		for i = 1, 25 do
-			self.healthArray[i] = UnitHealth('target')
+			self.health_array[i] = UnitHealth('target')
 		end
 	end
 	self.boss = false
@@ -1429,7 +1304,7 @@ function Target:Update()
 	self.hostile = UnitCanAttack('player', 'target') and not UnitIsDead('target')
 	self:UpdateHealth()
 	if not self.player and self.classification ~= 'minus' and self.classification ~= 'normal' then
-		if self.level == -1 or (Player.instance == 'party' and self.level >= UnitLevel('player') + 2) then
+		if self.level == -1 or (Player.instance == 'party' and self.level >= UnitLevel('player') + 3) then
 			self.boss = true
 			self.stunnable = false
 		elseif Player.instance == 'raid' or (self.health_max > Player.health_max * 10) then
@@ -1446,13 +1321,6 @@ end
 -- End Target API
 
 -- Start Ability Modifications
-
-function ConcentratedFlame.dot:Remains()
-	if ConcentratedFlame:Traveling() then
-		return self:Duration()
-	end
-	return Ability.Remains(self)
-end
 
 function SerpentSting:Remains()
 	local remains = Ability.Remains(self)
@@ -1527,12 +1395,15 @@ function PetFrenzy:StartDurationStack()
 		_, _, stack, _, duration, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
 		if not id then
 			return 0, 0, 0
-		end
-		if self:Match(id) then
+		elseif self:Match(id) then
 			return expires - duration, duration, stack
 		end
 	end
 	return 0, 0, 0
+end
+
+function WildSpirits:Remains()
+	return min(max(self.buff_duration - (Player.time - self.last_used), 0), self.buff_duration)
 end
 
 -- End Ability Modifications
@@ -1573,18 +1444,13 @@ APL[SPEC.BEASTMASTERY].main = function(self)
 	elseif MendPet:Usable() then
 		UseExtra(MendPet)
 	end
+	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(Player.enemies - 1, 6)) or AspectOfTheWild:Up() or (WildSpirits.known and WildSpirits:Up())
 	if Player:TimeInCombat() == 0 then
 --[[
 actions.precombat=flask
 actions.precombat+=/summon_pet
 actions.precombat+=/potion
-actions.precombat+=/worldvein_resonance
-actions.precombat+=/guardian_of_azeroth
-actions.precombat+=/memory_of_lucid_dreams
-# Adjusts the duration and cooldown of Aspect of the Wild and Primal Instincts by the duration of an unhasted GCD when they're used precombat. As AotW has a 1.3s GCD and affects itself this is 1.1s.
-actions.precombat+=/aspect_of_the_wild,precast_time=1.1,if=!azerite.primal_instincts.enabled
-# Adjusts the duration and cooldown of Bestial Wrath and Haze of Rage by the duration of an unhasted GCD when they're used precombat.
-actions.precombat+=/bestial_wrath,precast_time=1.5,if=azerite.primal_instincts.enabled
+actions.precombat+=/aspect_of_the_wild,precast_time=1.1
 ]]
 		if Opt.pot and not Player:InArenaOrBattleground() then
 			if GreaterFlaskOfTheCurrents:Usable() and GreaterFlaskOfTheCurrents.buff:Remains() < 300 then
@@ -1594,14 +1460,8 @@ actions.precombat+=/bestial_wrath,precast_time=1.5,if=azerite.primal_instincts.e
 				UseCooldown(SuperiorBattlePotionOfAgility)
 			end
 		end
-		if PrimalInstincts.known then
-			if BestialWrath:Usable() then
-				UseCooldown(BestialWrath)
-			end
-		else
-			if AspectOfTheWild:Usable() then
-				UseCooldown(AspectOfTheWild)
-			end
+		if Player.use_cds and AspectOfTheWild:Usable() then
+			UseCooldown(AspectOfTheWild)
 		end
 	end
 --[[
@@ -1611,14 +1471,9 @@ actions+=/call_action_list,name=cds
 actions+=/call_action_list,name=st,if=active_enemies<2
 actions+=/call_action_list,name=cleave,if=active_enemies>1
 ]]
-	if Opt.trinket then
-		if Trinket1:Usable() then
-			UseCooldown(Trinket1)
-		elseif Trinket2:Usable() then
-			UseCooldown(Trinket2)
-		end
+	if Player.use_cds then
+		self:cds()
 	end
-	self:cds()
 	if PetFrenzy:Stack() >= 2 and PetFrenzy:Remains() < (Player.gcd + 0.3) and BarbedShot:Ready(PetFrenzy:Remains()) then
 		return WaitFor(BarbedShot, PetFrenzy:Remains() - 0.5)
 	end
@@ -1636,28 +1491,25 @@ actions.cds+=/berserking,if=buff.aspect_of_the_wild.up&(target.time_to_die>coold
 actions.cds+=/blood_fury,if=buff.aspect_of_the_wild.up&(target.time_to_die>cooldown.blood_fury.duration+duration|(target.health.pct<35|!talent.killer_instinct.enabled))|target.time_to_die<16
 actions.cds+=/lights_judgment,if=pet.cat.buff.frenzy.up&pet.cat.buff.frenzy.remains>gcd.max|!pet.cat.buff.frenzy.up
 actions.cds+=/potion,if=buff.bestial_wrath.up&buff.aspect_of_the_wild.up&(target.health.pct<35|!talent.killer_instinct.enabled)|target.time_to_die<25
-actions.cds+=/worldvein_resonance,if=buff.lifeblood.stack<4
-actions.cds+=/guardian_of_azeroth
-actions.cds+=/ripple_in_space
-actions.cds+=/memory_of_lucid_dreams
 ]]
-	if Opt.pot and Target.boss and SuperiorBattlePotionOfAgility:Usable() and (BestialWrath:Up() and AspectOfTheWild:Up() and (Target.healthPercentage < 35 or not KillerInstinct.known) or Target.timeToDie < 25) then
-		UseCooldown(SuperiorBattlePotionOfAgility)
+	if Opt.trinket then
+		if Trinket1:Usable() then
+			return UseCooldown(Trinket1)
+		elseif Trinket2:Usable() then
+			return UseCooldown(Trinket2)
+		end
 	end
-	if WorldveinResonance:Usable() and Lifeblood:Stack() < 4 then
-		UseCooldown(WorldveinResonance)
-	elseif GuardianOfAzeroth:Usable() then
-		UseCooldown(GuardianOfAzeroth)
-	elseif RippleInSpace:Usable() then
-		UseCooldown(RippleInSpace)
-	elseif MemoryOfLucidDreams:Usable() then
-		UseCooldown(MemoryOfLucidDreams)
+	if Opt.pot and Target.boss and SuperiorBattlePotionOfAgility:Usable() and (BestialWrath:Up() and AspectOfTheWild:Up() and (Target.healthPercentage < 35 or not KillerInstinct.known) or Target.timeToDie < 25) then
+		return UseCooldown(SuperiorBattlePotionOfAgility)
+	end
+	if WildSpirits:Usable() and WildSpirits:Down() then
+		return UseCooldown(WildSpirits)
 	end
 end
 
 APL[SPEC.BEASTMASTERY].st = function(self)
 --[[
-actions.st=barbed_shot,if=pet.cat.buff.frenzy.up&pet.cat.buff.frenzy.remains<=gcd.max|full_recharge_time<gcd.max&cooldown.bestial_wrath.remains|azerite.primal_instincts.enabled&cooldown.aspect_of_the_wild.remains<gcd
+actions.st=barbed_shot,if=pet.cat.buff.frenzy.up&pet.cat.buff.frenzy.remains<=gcd.max|full_recharge_time<gcd.max&cooldown.bestial_wrath.remains
 actions.st+=/aspect_of_the_wild
 actions.st+=/a_murder_of_crows
 actions.st+=/stampede,if=buff.aspect_of_the_wild.up&buff.bestial_wrath.up|target.time_to_die<15
@@ -1665,19 +1517,14 @@ actions.st+=/bestial_wrath,if=cooldown.aspect_of_the_wild.remains>20|target.time
 actions.st+=/kill_command
 actions.st+=/chimaera_shot
 actions.st+=/dire_beast
-actions.st+=/barbed_shot,if=pet.cat.buff.frenzy.down&(charges_fractional>1.8|buff.bestial_wrath.up)|cooldown.aspect_of_the_wild.remains<pet.cat.buff.frenzy.duration-gcd&azerite.primal_instincts.enabled|azerite.dance_of_death.rank>1&buff.dance_of_death.down&crit_pct_current>40|target.time_to_die<9
-actions.st+=/focused_azerite_beam
-actions.st+=/purifying_blast
-actions.st+=/concentrated_flame
-actions.st+=/blood_of_the_enemy
-actions.st+=/reaping_flames
+actions.st+=/barbed_shot,if=pet.cat.buff.frenzy.down&(charges_fractional>1.8|buff.bestial_wrath.up)|target.time_to_die<9
 actions.st+=/the_unbound_force,if=buff.reckless_force.up|buff.reckless_force_counter.stack<10
 actions.st+=/barrage
-actions.st+=/cobra_shot,if=(focus-cost+focus.regen*(cooldown.kill_command.remains-1)>action.kill_command.cost|cooldown.kill_command.remains>1+gcd|buff.memory_of_lucid_dreams.up)&cooldown.kill_command.remains>1
+actions.st+=/cobra_shot,if=(focus-cost+focus.regen*(cooldown.kill_command.remains-1)>action.kill_command.cost|cooldown.kill_command.remains>1+gcd)&cooldown.kill_command.remains>1
 actions.st+=/spitting_cobra
 actions.st+=/barbed_shot,if=charges_fractional>1.4
 ]]
-	if BarbedShot:Usable() and ((PetFrenzy:Up() and PetFrenzy:Remains() <= (Player.gcd + 0.3)) or (BarbedShot:FullRechargeTime() < Player.gcd and not BestialWrath:Ready()) or (PrimalInstincts.known and AspectOfTheWild:Ready(Player.gcd))) then
+	if BarbedShot:Usable() and ((PetFrenzy:Up() and PetFrenzy:Remains() <= (Player.gcd + 0.3)) or (BarbedShot:FullRechargeTime() < Player.gcd and not BestialWrath:Ready())) then
 		return BarbedShot
 	end
 	if AspectOfTheWild:Usable() then
@@ -1701,21 +1548,8 @@ actions.st+=/barbed_shot,if=charges_fractional>1.4
 	if DireBeast:Usable() then
 		return DireBeast
 	end
-	if BarbedShot:Usable() and ((PetFrenzy:Down() and (BarbedShot:ChargesFractional() > 1.8 or BestialWrath:Up())) or (PrimalInstincts.known and AspectOfTheWild:Ready(PetFrenzy:Duration() - Player.gcd)) or (DanceOfDeath:AzeriteRank() > 1 and DanceOfDeath:Down() and GetCritChance() > 40) or Target.timeToDie < 9) then
+	if BarbedShot:Usable() and ((PetFrenzy:Down() and (BarbedShot:ChargesFractional() > 1.8 or BestialWrath:Up())) or Target.timeToDie < 9) then
 		return BarbedShot
-	end
-	if FocusedAzeriteBeam:Usable() and (BarbedShot:Down() or BarbedShot:Remains() > (4.5 * Player:HasteFactor())) then
-		UseCooldown(FocusedAzeriteBeam)
-	elseif PurifyingBlast:Usable() then
-		UseCooldown(PurifyingBlast)
-	elseif ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
-		UseCooldown(ConcentratedFlame)
-	elseif BloodOfTheEnemy:Usable() then
-		UseCooldown(BloodOfTheEnemy)
-	elseif TheUnboundForce:Usable() and (RecklessForce:Up() or RecklessForce.counter:Stack() < 10) then
-		UseCooldown(TheUnboundForce)
-	elseif ReapingFlames:Usable() then
-		UseCooldown(ReapingFlames)
 	end
 	if Barrage:Usable() then
 		return Barrage
@@ -1742,17 +1576,11 @@ actions.cleave+=/bestial_wrath,if=cooldown.aspect_of_the_wild.remains_guess>20|t
 actions.cleave+=/chimaera_shot
 actions.cleave+=/a_murder_of_crows
 actions.cleave+=/barrage
-actions.cleave+=/kill_command,if=active_enemies<4|!azerite.rapid_reload.enabled
+actions.cleave+=/kill_command
 actions.cleave+=/dire_beast
-actions.cleave+=/barbed_shot,target_if=min:dot.barbed_shot.remains,if=pet.cat.buff.frenzy.down&(charges_fractional>1.8|buff.bestial_wrath.up)|cooldown.aspect_of_the_wild.remains<pet.cat.buff.frenzy.duration-gcd&azerite.primal_instincts.enabled|charges_fractional>1.4|target.time_to_die<9
-actions.cleave+=/focused_azerite_beam
-actions.cleave+=/purifying_blast
-actions.cleave+=/concentrated_flame
-actions.cleave+=/blood_of_the_enemy
-actions.cleave+=/reaping_flames
+actions.cleave+=/barbed_shot,target_if=min:dot.barbed_shot.remains,if=pet.cat.buff.frenzy.down&(charges_fractional>1.8|buff.bestial_wrath.up)|charges_fractional>1.4|target.time_to_die<9
 actions.cleave+=/the_unbound_force,if=buff.reckless_force.up|buff.reckless_force_counter.stack<10
-actions.cleave+=/multishot,if=azerite.rapid_reload.enabled&active_enemies>2
-actions.cleave+=/cobra_shot,if=cooldown.kill_command.remains>focus.time_to_max&(active_enemies<3|!azerite.rapid_reload.enabled)
+actions.cleave+=/cobra_shot,if=cooldown.kill_command.remains>focus.time_to_max
 actions.cleave+=/spitting_cobra
 ]]
 	if BarbedShot:Usable() and PetFrenzy:Up() and PetFrenzy:Remains() <= (Player.gcd + 0.3) then
@@ -1782,32 +1610,16 @@ actions.cleave+=/spitting_cobra
 	if Barrage:Usable() then
 		return Barrage
 	end
-	if KillCommandBM:Usable() and (Player.enemies < 4 or not RapidReload.known) then
+	if KillCommandBM:Usable() then
 		return KillCommandBM
 	end
 	if DireBeast:Usable() then
 		return DireBeast
 	end
-	if BarbedShot:Usable() and ((PetFrenzy:Down() and (BarbedShot:ChargesFractional() > 1.8 or BestialWrath:Up())) or (PrimalInstincts.known and AspectOfTheWild:Ready(PetFrenzy:Duration() - Player.gcd)) or BarbedShot:ChargesFractional() > 1.4 or Target.timeToDie < 9) then
+	if BarbedShot:Usable() and ((PetFrenzy:Down() and (BarbedShot:ChargesFractional() > 1.8 or BestialWrath:Up())) or BarbedShot:ChargesFractional() > 1.4 or Target.timeToDie < 9) then
 		return BarbedShot
 	end
-	if FocusedAzeriteBeam:Usable() and MultiShotBM:Previous() and (BarbedShot:Down() or BarbedShot:Remains() > (4.5 * Player:HasteFactor())) then
-		UseCooldown(FocusedAzeriteBeam)
-	elseif PurifyingBlast:Usable() then
-		UseCooldown(PurifyingBlast)
-	elseif ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
-		UseCooldown(ConcentratedFlame)
-	elseif BloodOfTheEnemy:Usable() then
-		UseCooldown(BloodOfTheEnemy)
-	elseif TheUnboundForce:Usable() and (RecklessForce:Up() or RecklessForce.counter:Stack() < 10) then
-		UseCooldown(TheUnboundForce)
-	elseif ReapingFlames:Usable() then
-		UseCooldown(ReapingFlames)
-	end
-	if RapidReload.known and MultiShotBM:Usable() and Player.enemies > 2 then
-		return MultiShotBM
-	end
-	if CobraShot:Usable() and KillCommandBM:Cooldown() > Player:FocusTimeToMax() and (Player.enemies < 3 or not RapidReload.known) then
+	if CobraShot:Usable() and KillCommandBM:Cooldown() > Player:FocusTimeToMax() then
 		return CobraShot
 	end
 	if SpittingCobra:Usable() then
@@ -1868,12 +1680,13 @@ actions+=/call_action_list,name=apst,if=active_enemies<3&talent.alpha_predator.e
 actions+=/call_action_list,name=apwfi,if=active_enemies<3&talent.alpha_predator.enabled&talent.wildfire_infusion.enabled
 actions+=/call_action_list,name=wfi,if=active_enemies<3&!talent.alpha_predator.enabled&talent.wildfire_infusion.enabled
 actions+=/call_action_list,name=cleave,if=active_enemies>1&!talent.birds_of_prey.enabled|active_enemies>2
-actions+=/concentrated_flame
 actions+=/arcane_torrent
 actions+=/bag_of_tricks
 ]]
-	local apl
-	apl = self:cds()
+	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(Player.enemies - 1, 6)) or CoordinatedAssault:Up() or (WildSpirits.known and WildSpirits:Up())
+	if Player.use_cds then
+		self:cds()
+	end
 	if Player.enemies > (BirdsOfPrey.known and 2 or 1) then
 		return self:cleave()
 	end
@@ -1902,66 +1715,21 @@ end
 
 APL[SPEC.SURVIVAL].cds = function(self)
 --[[
-actions.cds=blood_fury,if=cooldown.coordinated_assault.remains>30
-actions.cds+=/ancestral_call,if=cooldown.coordinated_assault.remains>30
-actions.cds+=/fireblood,if=cooldown.coordinated_assault.remains>30
-actions.cds+=/lights_judgment
-actions.cds+=/berserking,if=cooldown.coordinated_assault.remains>60|time_to_die<13
-actions.cds+=/potion,if=buff.guardian_of_azeroth.up&(buff.berserking.up|buff.blood_fury.up|!race.troll)|(consumable.potion_of_unbridled_fury&target.time_to_die<61|target.time_to_die<26)|!essence.condensed_lifeforce.major&buff.coordinated_assault.up
+actions.cds=potion,if=(consumable.potion_of_unbridled_fury&target.time_to_die<61|target.time_to_die<26)|buff.coordinated_assault.up
 actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
-actions.cds+=/use_item,name=ashvanes_razor_coral,if=buff.memory_of_lucid_dreams.up&target.time_to_die<cooldown.memory_of_lucid_dreams.remains+15|buff.guardian_of_azeroth.stack=5&target.time_to_die<cooldown.guardian_of_azeroth.remains+20|debuff.razor_coral_debuff.down|target.time_to_die<21|buff.worldvein_resonance.remains&target.time_to_die<cooldown.worldvein_resonance.remains+18|!talent.birds_of_prey.enabled&target.time_to_die<cooldown.coordinated_assault.remains+20&buff.coordinated_assault.remains
-actions.cds+=/use_item,name=galecallers_boon,if=cooldown.memory_of_lucid_dreams.remains|talent.wildfire_infusion.enabled&cooldown.coordinated_assault.remains|!essence.memory_of_lucid_dreams.major&cooldown.coordinated_assault.remains
-actions.cds+=/use_item,name=azsharas_font_of_power
-actions.cds+=/focused_azerite_beam,if=raid_event.adds.in>90&focus<focus.max-25|(active_enemies>1&!talent.birds_of_prey.enabled|active_enemies>2)&(buff.blur_of_talons.up&buff.blur_of_talons.remains>3*gcd|!buff.blur_of_talons.up)
-actions.cds+=/blood_of_the_enemy,if=((raid_event.adds.remains>90|!raid_event.adds.exists)|(active_enemies>1&!talent.birds_of_prey.enabled|active_enemies>2))&focus<focus.max
-actions.cds+=/purifying_blast,if=((raid_event.adds.remains>60|!raid_event.adds.exists)|(active_enemies>1&!talent.birds_of_prey.enabled|active_enemies>2))&focus<focus.max
-actions.cds+=/guardian_of_azeroth
-actions.cds+=/ripple_in_space
-actions.cds+=/concentrated_flame,if=full_recharge_time<1*gcd
-actions.cds+=/the_unbound_force,if=buff.reckless_force.up
-actions.cds+=/worldvein_resonance
-actions.cds+=/reaping_flames,if=target.health.pct>80|target.health.pct<=20|target.time_to_pct_20>30
-actions.cds+=/serpent_sting,if=essence.memory_of_lucid_dreams.major&refreshable&buff.vipers_venom.up&!cooldown.memory_of_lucid_dreams.remains
-actions.cds+=/mongoose_bite,if=essence.memory_of_lucid_dreams.major&!cooldown.memory_of_lucid_dreams.remains
-actions.cds+=/wildfire_bomb,if=essence.memory_of_lucid_dreams.major&full_recharge_time<1.5*gcd&focus<action.mongoose_bite.cost&!cooldown.memory_of_lucid_dreams.remains
-actions.cds+=/memory_of_lucid_dreams,if=focus<action.mongoose_bite.cost&buff.coordinated_assault.up
 ]]
-	if Opt.pot and Target.boss and not Player:InArenaOrBattleground() and PotionOfUnbridledFury:Usable() and ((GuardianOfAzeroth.known and GuardianOfAzeroth:Up()) or (not GuardianOfAzeroth.known and CoordinatedAssault:Up() and Player:BloodlustActive()) or Target.timeToDie < 61) then
-		UseCooldown(PotionOfUnbridledFury)
-	end
-	if FocusedAzeriteBeam:Usable() and (Player:FocusDeficit() > 25 or (Player.enemies > (BirdsOfPrey.known and 2 or 1) and (not BlurOfTalons.known or BlurOfTalons:Down() or BlurOfTalons:Remains() > (3 * Player.gcd)))) then
-		UseCooldown(FocusedAzeriteBeam)
-	elseif BloodOfTheEnemy:Usable() and Player:FocusDeficit() > 0 then
-		UseCooldown(BloodOfTheEnemy)
-	elseif PurifyingBlast:Usable() and Player:FocusDeficit() > 0 then
-		UseCooldown(PurifyingBlast)
-	elseif GuardianOfAzeroth:Usable() then
-		UseCooldown(GuardianOfAzeroth)
-	elseif RippleInSpace:Usable() then
-		UseCooldown(RippleInSpace)
-	elseif ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() and ConcentratedFlame:FullRechargeTime() < Player.gcd then
-		UseCooldown(ConcentratedFlame)
-	elseif TheUnboundForce:Usable() and (RecklessForce:Up() or RecklessForce.counter:Stack() < 10) then
-		UseCooldown(TheUnboundForce)
-	elseif WorldveinResonance:Usable() and Lifeblood:Stack() < 4 then
-		UseCooldown(WorldveinResonance)
-	elseif ReapingFlames:Usable() then
-		UseCooldown(ReapingFlames)
-	elseif MemoryOfLucidDreams.known then
-		if MemoryOfLucidDreams:Ready() and (CoordinatedAssault:Ready() or CoordinatedAssault:Up()) then
-			if SerpentSting:Usable() and SerpentSting:Refreshable() and VipersVenom:Up() then
-				UseCooldown(SerpentSting)
-			end
-			if MongooseBite:Usable() then
-				UseCooldown(MongooseBite)
-			end
-			if WildfireBomb:Usable() and WildfireBomb:FullRechargeTime() < (1.5 * Player.gcd) then
-				UseCooldown(WildfireBomb)
-			end
-			if MemoryOfLucidDreams:Usable() and CoordinatedAssault:Up() then
-				UseCooldown(MemoryOfLucidDreams)
-			end
+	if Opt.trinket then
+		if Trinket1:Usable() then
+			return UseCooldown(Trinket1)
+		elseif Trinket2:Usable() then
+			return UseCooldown(Trinket2)
 		end
+	end
+	if Opt.pot and Target.boss and not Player:InArenaOrBattleground() and PotionOfUnbridledFury:Usable() and ((CoordinatedAssault:Up() and Player:BloodlustActive()) or Target.timeToDie < 61) then
+		return UseCooldown(PotionOfUnbridledFury)
+	end
+	if WildSpirits:Usable() and WildSpirits:Down() then
+		return UseCooldown(WildSpirits)
 	end
 end
 
@@ -1969,13 +1737,13 @@ APL[SPEC.SURVIVAL].st = function(self)
 --[[
 actions.st=harpoon,if=talent.terms_of_engagement.enabled
 actions.st+=/flanking_strike,if=focus+cast_regen<focus.max
-actions.st+=/raptor_strike,if=buff.coordinated_assault.up&(buff.coordinated_assault.remains<1.5*gcd|buff.blur_of_talons.up&buff.blur_of_talons.remains<1.5*gcd)
+actions.st+=/raptor_strike,if=buff.coordinated_assault.up&buff.coordinated_assault.remains<1.5*gcd
 # To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
-actions.st+=/mongoose_bite,if=buff.coordinated_assault.up&(buff.coordinated_assault.remains<1.5*gcd|buff.blur_of_talons.up&buff.blur_of_talons.remains<1.5*gcd)
+actions.st+=/mongoose_bite,if=buff.coordinated_assault.up&buff.coordinated_assault.remains<1.5*gcd
 actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
 actions.st+=/serpent_sting,if=buff.vipers_venom.up&buff.vipers_venom.remains<1*gcd
 actions.st+=/steel_trap,if=focus+cast_regen<focus.max
-actions.st+=/wildfire_bomb,if=focus+cast_regen<focus.max&refreshable&full_recharge_time<gcd&!buff.memory_of_lucid_dreams.up|focus+cast_regen<focus.max&(!dot.wildfire_bomb.ticking&(!buff.coordinated_assault.up|buff.mongoose_fury.stack<1|time_to_die<18|!dot.wildfire_bomb.ticking&azerite.wilderness_survival.rank>0))&!buff.memory_of_lucid_dreams.up
+actions.st+=/wildfire_bomb,if=focus+cast_regen<focus.max&refreshable&full_recharge_time<gcd|focus+cast_regen<focus.max&(!dot.wildfire_bomb.ticking&(!buff.coordinated_assault.up|buff.mongoose_fury.stack<1|time_to_die<18))
 actions.st+=/serpent_sting,if=buff.vipers_venom.up&dot.serpent_sting.remains<4*gcd|dot.serpent_sting.refreshable&!buff.coordinated_assault.up
 actions.st+=/a_murder_of_crows,if=!buff.coordinated_assault.up
 actions.st+=/coordinated_assault,if=!buff.coordinated_assault.up
@@ -1990,7 +1758,7 @@ actions.st+=/serpent_sting,if=buff.vipers_venom.up
 	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
 		return FlankingStrike
 	end
-	if CoordinatedAssault:Up() and (CoordinatedAssault:Remains() < (1.5 * Player.gcd) or BlurOfTalons.known and BlurOfTalons:Up() and BlurOfTalons:Remains() < (1.5 * Player.gcd)) then
+	if CoordinatedAssault:Up() and CoordinatedAssault:Remains() < (1.5 * Player.gcd) then
 		if MongooseBite:Usable() then
 			return MongooseBite
 		end
@@ -2007,7 +1775,7 @@ actions.st+=/serpent_sting,if=buff.vipers_venom.up
 	if SteelTrap:Usable() and SteelTrap:WontCapFocus() then
 		UseCooldown(SteelTrap)
 	end
-	if WildfireBomb:Usable() and WildfireBomb:WontCapFocus() and (not MemoryOfLucidDreams.known or MemoryOfLucidDreams:Down()) and ((WildfireBomb:Refreshable() and WildfireBomb:FullRechargeTime() < Player.gcd) or (CoordinatedAssault:Down() or MongooseFury:Stack() < 1 or Target.timeToDie < 18 or (WildfireBomb:Down() and WildernessSurvival.known))) then
+	if WildfireBomb:Usable() and WildfireBomb:WontCapFocus() and ((WildfireBomb:Refreshable() and WildfireBomb:FullRechargeTime() < Player.gcd) or (CoordinatedAssault:Down() or MongooseFury:Stack() < 1 or Target.timeToDie < 18 or (WildfireBomb:Down() and WildernessSurvival.known))) then
 		return WildfireBomb
 	end
 	if SerpentSting:Usable() and ((VipersVenom.known and VipersVenom:Up() and SerpentSting:Remains() < (4 * Player.gcd)) or (SerpentSting:Refreshable() and CoordinatedAssault:Down())) then
@@ -2033,19 +1801,16 @@ actions.st+=/serpent_sting,if=buff.vipers_venom.up
 	if VipersVenom.known and SerpentSting:Usable() and VipersVenom:Up() then
 		return SerpentSting
 	end
-	if ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
-		return ConcentratedFlame
-	end
 end
 
 APL[SPEC.SURVIVAL].apst = function(self)
 --[[
-actions.apst=mongoose_bite,if=buff.coordinated_assault.up&(buff.coordinated_assault.remains<1.5*gcd|buff.blur_of_talons.up&buff.blur_of_talons.remains<1.5*gcd)
-actions.apst+=/raptor_strike,if=buff.coordinated_assault.up&(buff.coordinated_assault.remains<1.5*gcd|buff.blur_of_talons.up&buff.blur_of_talons.remains<1.5*gcd)
+actions.apst=mongoose_bite,if=buff.coordinated_assault.up&buff.coordinated_assault.remains<1.5*gcd
+actions.apst+=/raptor_strike,if=buff.coordinated_assault.up&buff.coordinated_assault.remains<1.5*gcd
 actions.apst+=/flanking_strike,if=focus+cast_regen<focus.max
 actions.apst+=/kill_command,target_if=min:bloodseeker.remains,if=full_recharge_time<1.5*gcd&focus+cast_regen<focus.max
 actions.apst+=/steel_trap,if=focus+cast_regen<focus.max
-actions.apst+=/wildfire_bomb,if=focus+cast_regen<focus.max&!ticking&!buff.memory_of_lucid_dreams.up&(full_recharge_time<1.5*gcd|!dot.wildfire_bomb.ticking&!buff.coordinated_assault.up|!dot.wildfire_bomb.ticking&buff.mongoose_fury.stack<1)|time_to_die<18&!dot.wildfire_bomb.ticking
+actions.apst+=/wildfire_bomb,if=focus+cast_regen<focus.max&!ticking&(full_recharge_time<1.5*gcd|!dot.wildfire_bomb.ticking&!buff.coordinated_assault.up|!dot.wildfire_bomb.ticking&buff.mongoose_fury.stack<1)|time_to_die<18&!dot.wildfire_bomb.ticking
 actions.apst+=/serpent_sting,if=!dot.serpent_sting.ticking&!buff.coordinated_assault.up
 actions.apst+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&(buff.mongoose_fury.stack<5|focus<action.mongoose_bite.cost)
 actions.apst+=/serpent_sting,if=refreshable&!buff.coordinated_assault.up&buff.mongoose_fury.stack<5
@@ -2055,7 +1820,7 @@ actions.apst+=/mongoose_bite,if=buff.mongoose_fury.up|focus+cast_regen>focus.max
 actions.apst+=/raptor_strike
 actions.apst+=/wildfire_bomb,if=!ticking
 ]]
-	if CoordinatedAssault:Up() and (CoordinatedAssault:Remains() < (1.5 * Player.gcd) or BlurOfTalons.known and BlurOfTalons:Up() and BlurOfTalons:Remains() < (1.5 * Player.gcd)) then
+	if CoordinatedAssault:Up() and CoordinatedAssault:Remains() < (1.5 * Player.gcd) then
 		if MongooseBite:Usable() then
 			return MongooseBite
 		end
@@ -2072,7 +1837,7 @@ actions.apst+=/wildfire_bomb,if=!ticking
 	if SteelTrap:Usable() and SteelTrap:WontCapFocus() then
 		UseCooldown(SteelTrap)
 	end
-	if WildfireBomb:Usable() and WildfireBomb:WontCapFocus() and (not MemoryOfLucidDreams.known or MemoryOfLucidDreams:Down()) and ((WildfireBomb:FullRechargeTime() < (1.5 * Player.gcd)) or (WildfireBomb:Down() and (CoordinatedAssault:Down() or MongooseFury:Stack() < 1 or Target.TimeToDie < 18))) then
+	if WildfireBomb:Usable() and WildfireBomb:WontCapFocus() and ((WildfireBomb:FullRechargeTime() < (1.5 * Player.gcd)) or (WildfireBomb:Down() and (CoordinatedAssault:Down() or MongooseFury:Stack() < 1 or Target.TimeToDie < 18))) then
 		return WildfireBomb
 	end
 	if CoordinatedAssault:Down() then
@@ -2095,16 +1860,11 @@ actions.apst+=/wildfire_bomb,if=!ticking
 	if WildfireBomb:Usable() and WildfireBomb:Down() then
 		return WildfireBomb
 	end
-	if ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
-		return ConcentratedFlame
-	end
 end
 
 APL[SPEC.SURVIVAL].wfi = function(self)
 --[[
 actions.wfi=harpoon,if=focus+cast_regen<focus.max&talent.terms_of_engagement.enabled
-actions.wfi+=/mongoose_bite,if=buff.blur_of_talons.up&buff.blur_of_talons.remains<gcd
-actions.wfi+=/raptor_strike,if=buff.blur_of_talons.up&buff.blur_of_talons.remains<gcd
 actions.wfi+=/serpent_sting,if=buff.vipers_venom.up&buff.vipers_venom.remains<1.5*gcd|!dot.serpent_sting.ticking
 actions.wfi+=/wildfire_bomb,if=full_recharge_time<1.5*gcd&focus+cast_regen<focus.max|(next_wi_bomb.volatile&dot.serpent_sting.ticking&dot.serpent_sting.refreshable|next_wi_bomb.pheromone&!buff.mongoose_fury.up&focus+cast_regen<focus.max-action.kill_command.cast_regen*3)
 actions.wfi+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max-focus.regen
@@ -2124,14 +1884,6 @@ actions.wfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|n
 ]]
 	if TermsOfEngagement.known and Harpoon:Usable() then
 		UseCooldown(Harpoon)
-	end
-	if BlurOfTalons.known and BlurOfTalons:Up() and BlurOfTalons:Remains() < Player.gcd then
-		if MongooseBite:Usable() then
-			return MongooseBite
-		end
-		if RaptorStrike:Usable() then
-			return RaptorStrike
-		end
 	end
 	if SerpentSting:Usable() and (SerpentSting:Down() or (VipersVenom.known and VipersVenom:Up() and VipersVenom:Remains() < (1.5 * Player.gcd))) then
 		return SerpentSting
@@ -2181,16 +1933,11 @@ actions.wfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|n
 	if WildfireBomb:Usable() and ((VolatileBomb.next and SerpentSting:Remains() > WildfireBomb:TravelTime()) or PheromoneBomb.next or ShrapnelBomb.next) then
 		return WildfireBomb
 	end
-	if ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
-		return ConcentratedFlame
-	end
 end
 
 APL[SPEC.SURVIVAL].apwfi = function(self)
 --[[
-actions.apwfi=mongoose_bite,if=buff.blur_of_talons.up&buff.blur_of_talons.remains<gcd
-actions.apwfi+=/raptor_strike,if=buff.blur_of_talons.up&buff.blur_of_talons.remains<gcd
-actions.apwfi+=/serpent_sting,if=!dot.serpent_sting.ticking
+actions.apwfi=serpent_sting,if=!dot.serpent_sting.ticking
 actions.apwfi+=/a_murder_of_crows
 actions.apwfi+=/wildfire_bomb,if=full_recharge_time<1.5*gcd|focus+cast_regen<focus.max&(next_wi_bomb.volatile&dot.serpent_sting.ticking&dot.serpent_sting.refreshable|next_wi_bomb.pheromone&!buff.mongoose_fury.up&focus+cast_regen<focus.max-action.kill_command.cast_regen*3)
 actions.apwfi+=/coordinated_assault
@@ -2207,14 +1954,6 @@ actions.apwfi+=/raptor_strike
 actions.apwfi+=/mongoose_bite,if=buff.mongoose_fury.up|focus>40|dot.shrapnel_bomb.ticking
 actions.apwfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|next_wi_bomb.pheromone|next_wi_bomb.shrapnel&focus>50
 ]]
-	if BlurOfTalons.known and BlurOfTalons:Up() and BlurOfTalons:Remains() < Player.gcd then
-		if MongooseBite:Usable() then
-			return MongooseBite
-		end
-		if RaptorStrike:Usable() then
-			return RaptorStrike
-		end
-	end
 	if SerpentSting:Usable() and SerpentSting:Down() then
 		return SerpentSting
 	end
@@ -2263,21 +2002,17 @@ actions.apwfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking
 	if WildfireBomb:Usable() and ((VolatileBomb.next and SerpentSting:Remains() > WildfireBomb:TravelTime()) or PheromoneBomb.next or (ShrapnelBomb.next and Player:Focus() > 50)) then
 		return WildfireBomb
 	end
-	if ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
-		return ConcentratedFlame
-	end
 end
 
 APL[SPEC.SURVIVAL].cleave = function(self)
 --[[
 actions.cleave=variable,name=carve_cdr,op=setif,value=active_enemies,value_else=5,condition=active_enemies<5
-actions.cleave+=/mongoose_bite,if=azerite.blur_of_talons.rank>0&(buff.coordinated_assault.up&(buff.coordinated_assault.remains<1.5*gcd|buff.blur_of_talons.up&buff.blur_of_talons.remains<1.5*gcd|buff.coordinated_assault.remains&!buff.blur_of_talons.remains))
 actions.cleave+=/mongoose_bite,target_if=min:time_to_die,if=debuff.latent_poison.stack>(active_enemies|9)&target.time_to_die<active_enemies*gcd
 actions.cleave+=/a_murder_of_crows
 actions.cleave+=/coordinated_assault
 actions.cleave+=/carve,if=dot.shrapnel_bomb.ticking&!talent.hydras_bite.enabled|dot.shrapnel_bomb.ticking&active_enemies>5
 actions.cleave+=/wildfire_bomb,if=!talent.guerrilla_tactics.enabled|full_recharge_time<gcd|raid_event.adds.remains<6&raid_event.adds.exists
-actions.cleave+=/butchery,if=charges_fractional>2.5|dot.shrapnel_bomb.ticking|cooldown.wildfire_bomb.remains>active_enemies-gcd|debuff.blood_of_the_enemy.remains|raid_event.adds.remains<5&raid_event.adds.exists
+actions.cleave+=/butchery,if=charges_fractional>2.5|dot.shrapnel_bomb.ticking|cooldown.wildfire_bomb.remains>active_enemies-gcd|raid_event.adds.remains<5&raid_event.adds.exists
 actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison.stack,if=debuff.latent_poison.stack>8
 actions.cleave+=/chakrams
 actions.cleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
@@ -2289,16 +2024,13 @@ actions.cleave+=/wildfire_bomb,if=dot.wildfire_bomb.refreshable|talent.wildfire_
 actions.cleave+=/serpent_sting,target_if=min:remains,if=buff.vipers_venom.react
 actions.cleave+=/carve,if=cooldown.wildfire_bomb.remains>variable.carve_cdr%2
 actions.cleave+=/steel_trap
-actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&buff.tip_of_the_spear.stack<3&next_wi_bomb.volatile|refreshable&azerite.latent_poison.rank>0
+actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&buff.tip_of_the_spear.stack<3&next_wi_bomb.volatile|refreshable&legendary.latent_poison_injectors.enabled
 # To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
 actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison.stack
 actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
 ]]
 	local carve_cdr = min(Player.enemies, 5)
-	if BlurOfTalons.known and MongooseBite:Usable() and (CoordinatedAssault:Up() and (CoordinatedAssault:Remains() < (1.5 * Player.gcd) or BlurOfTalons:Up() and BlurOfTalons:Remains() < (1.5 * Player.gcd) or BlurOfTalons:Down())) then
-		return MongooseBite
-	end
-	if LatentPoison.known and MongooseBite:Usable() and LatentPoison:Stack() > 9 and Target.timeToDie < (Player.enemies * Player.gcd) then
+	if LatentPoisonInjectors.known and MongooseBite:Usable() and LatentPoisonInjectors:Stack() > 9 and Target.timeToDie < (Player.enemies * Player.gcd) then
 		return MongooseBite
 	end
 	if AMurderOfCrows:Usable() then
@@ -2313,10 +2045,10 @@ actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
 	if WildfireBomb:Usable() and (not GuerrillaTactics.known or WildfireBomb:FullRechargeTime() < Player.gcd) then
 		return WildfireBomb
 	end
-	if Butchery:Usable() and (Butchery:ChargesFractional() > 2.5 or ShrapnelBomb:Ticking() > 0 or WildfireBomb:Cooldown() > (Player.enemies - Player.gcd) or (BloodOfTheEnemy.known and BloodOfTheEnemy:Up())) then
+	if Butchery:Usable() and (Butchery:ChargesFractional() > 2.5 or ShrapnelBomb:Ticking() > 0 or WildfireBomb:Cooldown() > (Player.enemies - Player.gcd)) then
 		return Butchery
 	end
-	if MongooseBite:Usable() and LatentPoison:Stack() > 8 then
+	if LatentPoisonInjectors.known and MongooseBite:Usable() and LatentPoisonInjectors:Stack() > 8 then
 		return MongooseBite
 	end
 	if Chakrams:Usable() then
@@ -2349,7 +2081,7 @@ actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
 	if SteelTrap:Usable() then
 		UseCooldown(SteelTrap)
 	end
-	if SerpentSting:Usable() and SerpentSting:Refreshable() and (LatentPoison.known or (VolatileBomb.next and (not TipOfTheSpear.known or TipOfTheSpear:Stack() < 3))) then
+	if SerpentSting:Usable() and SerpentSting:Refreshable() and (LatentPoisonInjectors.known or (VolatileBomb.next and (not TipOfTheSpear.known or TipOfTheSpear:Stack() < 3))) then
 		return SerpentSting
 	end
 	if SerpentSting:Usable() and HydrasBite.known and VolatileBomb.next and SerpentSting:Ticking() < Player.enemies and WildfireBomb:Ready(6 * Player.gcd) then
@@ -2360,9 +2092,6 @@ actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
 	end
 	if RaptorStrike:Usable() then
 		return RaptorStrike
-	end
-	if ConcentratedFlame:Usable() and ConcentratedFlame.dot:Down() then
-		return ConcentratedFlame
 	end
 end
 
@@ -2635,7 +2364,7 @@ end
 
 function UI:UpdateCombat()
 	timer.combat = 0
-	local _, start, duration, remains, spellId
+	local _, start, duration, remains, spellId, speed, max_speed
 	Player.ctime = GetTime()
 	Player.time = Player.ctime - Player.time_diff
 	Player.main =  nil
@@ -2658,7 +2387,9 @@ function UI:UpdateCombat()
 		Player.focus = Player.focus - Player.ability_casting:Cost()
 	end
 	Player.focus = min(max(Player.focus, 0), Player.focus_max)
-	Player.moving = GetUnitSpeed('player') ~= 0
+	speed, max_speed = GetUnitSpeed('player')
+	Player.moving = speed ~= 0
+	Player.movement_speed = max_speed / 7 * 100
 	Player:UpdatePet()
 
 	trackAuras:Purge()
@@ -2730,17 +2461,16 @@ end
 -- Start Event Handling
 
 function events:ADDON_LOADED(name)
-	if name == 'GoodHunting' then
+	if name == ADDON then
 		Opt = GoodHunting
 		if not Opt.frequency then
-			print('It looks like this is your first time running ' .. name .. ', why don\'t you take some time to familiarize yourself with the commands?')
+			print('It looks like this is your first time running ' .. ADDON .. ', why don\'t you take some time to familiarize yourself with the commands?')
 			print('Type |cFFFFD000' .. SLASH_GoodHunting1 .. '|r for a list of commands.')
 		end
 		if UnitLevel('player') < 10 then
-			print('[|cFFFFD000Warning|r] ' .. name .. ' is not designed for players under level 10, and almost certainly will not operate properly!')
+			print('[|cFFFFD000Warning|r] ' .. ADDON .. ' is not designed for players under level 10, and almost certainly will not operate properly!')
 		end
 		InitOpts()
-		Azerite:Init()
 		UI:UpdateDraggable()
 		UI:UpdateAlpha()
 		UI:UpdateScale()
@@ -2782,7 +2512,7 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 
 	local ability = spellId and abilities.bySpellId[spellId]
 	if not ability then
-		--print(format('EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d', eventType, spellName, spellId))
+		--print(format('EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d', eventType, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0))
 		return
 	end
 
@@ -2790,7 +2520,6 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 	   eventType == 'SPELL_CAST_START' or
 	   eventType == 'SPELL_CAST_SUCCESS' or
 	   eventType == 'SPELL_CAST_FAILED' or
-	   eventType == 'SPELL_AURA_REMOVED' or
 	   eventType == 'SPELL_DAMAGE' or
 	   eventType == 'SPELL_ABSORBED' or
 	   eventType == 'SPELL_PERIODIC_DAMAGE' or
@@ -2806,6 +2535,7 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 	if eventType == 'SPELL_CAST_SUCCESS' then
 		if srcGUID == Player.guid or ability.player_triggered then
 			Player.last_ability = ability
+			ability.last_used = Player.time
 			if ability.triggers_gcd then
 				Player.previous_gcd[10] = nil
 				table.insert(Player.previous_gcd, 1, ability)
@@ -2818,7 +2548,7 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			end
 			if Opt.previous and ghPanel:IsVisible() then
 				ghPreviousPanel.ability = ability
-				ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\border.blp')
+				ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 				ghPreviousPanel.icon:SetTexture(ability.icon)
 				ghPreviousPanel:Show()
 			end
@@ -2869,7 +2599,7 @@ function events:COMBAT_LOG_EVENT_UNFILTERED()
 			Target.estimated_range = ability.max_range
 		end
 		if Opt.previous and Opt.miss_effect and eventType == 'SPELL_MISSED' and ghPanel:IsVisible() and ability == ghPreviousPanel.ability then
-			ghPreviousPanel.border:SetTexture('Interface\\AddOns\\GoodHunting\\misseffect.blp')
+			ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'misseffect.blp')
 		end
 	end
 end
@@ -2896,6 +2626,7 @@ end
 
 function events:PLAYER_REGEN_ENABLED()
 	Player.combat_start = 0
+	Player.last_swing_taken = 0
 	Player.pet_stuck = false
 	Target.estimated_range = 30
 	Player.previous_gcd = {}
@@ -2948,7 +2679,6 @@ function events:PLAYER_EQUIPMENT_CHANGED()
 			inventoryItems[i].can_use = false
 		end
 	end
-	Azerite:Update()
 	Player:UpdateAbilities()
 end
 
@@ -2962,6 +2692,7 @@ function events:PLAYER_SPECIALIZATION_CHANGED(unitName)
 	Target:Update()
 	events:PLAYER_EQUIPMENT_CHANGED()
 	events:PLAYER_REGEN_ENABLED()
+	UI.OnResourceFrameShow()
 end
 
 function events:SPELL_UPDATE_COOLDOWN()
@@ -3000,8 +2731,15 @@ function events:PLAYER_PVP_TALENT_UPDATE()
 	Player:UpdateAbilities()
 end
 
-function events:AZERITE_ESSENCE_UPDATE()
-	Azerite:Update()
+function events:SOULBIND_ACTIVATED()
+	Player:UpdateAbilities()
+end
+
+function events:SOULBIND_NODE_UPDATED()
+	Player:UpdateAbilities()
+end
+
+function events:SOULBIND_PATH_CHANGED()
 	Player:UpdateAbilities()
 end
 
@@ -3090,10 +2828,10 @@ local function Status(desc, opt, ...)
 	else
 		opt_view = opt and '|cFF00C000On|r' or '|cFFC00000Off|r'
 	end
-	print('Good Hunting -', desc .. ':', opt_view, ...)
+	print(ADDON, '-', desc .. ':', opt_view, ...)
 end
 
-function SlashCmdList.GoodHunting(msg, editbox)
+SlashCmdList[ADDON] = function(msg, editbox)
 	msg = { strsplit(' ', msg:lower()) }
 	if startsWith(msg[1], 'lock') then
 		if msg[2] then
@@ -3233,13 +2971,13 @@ function SlashCmdList.GoodHunting(msg, editbox)
 			Opt.always_on = msg[2] == 'on'
 			Target:Update()
 		end
-		return Status('Show the Good Hunting UI without a target', Opt.always_on)
+		return Status('Show the ' .. ADDON .. ' UI without a target', Opt.always_on)
 	end
 	if msg[1] == 'cd' then
 		if msg[2] then
 			Opt.cooldown = msg[2] == 'on'
 		end
-		return Status('Use Good Hunting for cooldown management', Opt.cooldown)
+		return Status('Use ' .. ADDON .. ' for cooldown management', Opt.cooldown)
 	end
 	if msg[1] == 'swipe' then
 		if msg[2] then
@@ -3311,6 +3049,12 @@ function SlashCmdList.GoodHunting(msg, editbox)
 		end
 		return Status('Length of time target exists in auto AoE after being hit', Opt.auto_aoe_ttl, 'seconds')
 	end
+	if msg[1] == 'ttd' then
+		if msg[2] then
+			Opt.cd_ttd = tonumber(msg[2]) or 8
+		end
+		return Status('Minimum enemy lifetime to use cooldowns on (ignored on bosses)', Opt.cd_ttd, 'seconds')
+	end
 	if startsWith(msg[1], 'pot') then
 		if msg[2] then
 			Opt.pot = msg[2] == 'on'
@@ -3335,32 +3079,33 @@ function SlashCmdList.GoodHunting(msg, editbox)
 		UI:SnapAllPanels()
 		return Status('Position has been reset to', 'default')
 	end
-	print('Good Hunting (version: |cFFFFD000' .. GetAddOnMetadata('GoodHunting', 'Version') .. '|r) - Commands:')
+	print(ADDON, '(version: |cFFFFD000' .. GetAddOnMetadata(ADDON, 'Version') .. '|r) - Commands:')
 	local _, cmd
 	for _, cmd in next, {
-		'locked |cFF00C000on|r/|cFFC00000off|r - lock the Good Hunting UI so that it can\'t be moved',
-		'snap |cFF00C000above|r/|cFF00C000below|r/|cFFC00000off|r - snap the Good Hunting UI to the Personal Resource Display',
-		'scale |cFFFFD000prev|r/|cFFFFD000main|r/|cFFFFD000cd|r/|cFFFFD000interrupt|r/|cFFFFD000extra|r/|cFFFFD000glow|r - adjust the scale of the Good Hunting UI icons',
-		'alpha |cFFFFD000[percent]|r - adjust the transparency of the Good Hunting UI icons',
+		'locked |cFF00C000on|r/|cFFC00000off|r - lock the ' .. ADDON .. ' UI so that it can\'t be moved',
+		'snap |cFF00C000above|r/|cFF00C000below|r/|cFFC00000off|r - snap the ' .. ADDON .. ' UI to the Personal Resource Display',
+		'scale |cFFFFD000prev|r/|cFFFFD000main|r/|cFFFFD000cd|r/|cFFFFD000interrupt|r/|cFFFFD000extra|r/|cFFFFD000glow|r - adjust the scale of the ' .. ADDON .. ' UI icons',
+		'alpha |cFFFFD000[percent]|r - adjust the transparency of the ' .. ADDON .. ' UI icons',
 		'frequency |cFFFFD000[number]|r - set the calculation frequency (default is every 0.2 seconds)',
 		'glow |cFFFFD000main|r/|cFFFFD000cd|r/|cFFFFD000interrupt|r/|cFFFFD000extra|r/|cFFFFD000blizzard|r |cFF00C000on|r/|cFFC00000off|r - glowing ability buttons on action bars',
 		'glow color |cFFF000000.0-1.0|r |cFF00FF000.1-1.0|r |cFF0000FF0.0-1.0|r - adjust the color of the ability button glow',
 		'previous |cFF00C000on|r/|cFFC00000off|r - previous ability icon',
-		'always |cFF00C000on|r/|cFFC00000off|r - show the Good Hunting UI without a target',
-		'cd |cFF00C000on|r/|cFFC00000off|r - use Good Hunting for cooldown management',
+		'always |cFF00C000on|r/|cFFC00000off|r - show the ' .. ADDON .. ' UI without a target',
+		'cd |cFF00C000on|r/|cFFC00000off|r - use ' .. ADDON .. ' for cooldown management',
 		'swipe |cFF00C000on|r/|cFFC00000off|r - show spell casting swipe animation on main ability icon',
 		'dim |cFF00C000on|r/|cFFC00000off|r - dim main ability icon when you don\'t have enough resources to use it',
 		'miss |cFF00C000on|r/|cFFC00000off|r - red border around previous ability when it fails to hit',
 		'aoe |cFF00C000on|r/|cFFC00000off|r - allow clicking main ability icon to toggle amount of targets (disables moving)',
 		'bossonly |cFF00C000on|r/|cFFC00000off|r - only use cooldowns on bosses',
-		'hidespec |cFFFFD000beastmastery|r/|cFFFFD000marksmanship|r/|cFFFFD000survival|r  - toggle disabling Good Hunting for specializations',
+		'hidespec |cFFFFD000beastmastery|r/|cFFFFD000marksmanship|r/|cFFFFD000survival|r  - toggle disabling ' .. ADDON .. ' for specializations',
 		'interrupt |cFF00C000on|r/|cFFC00000off|r - show an icon for interruptable spells',
 		'auto |cFF00C000on|r/|cFFC00000off|r  - automatically change target mode on AoE spells',
 		'ttl |cFFFFD000[seconds]|r  - time target exists in auto AoE after being hit (default is 10 seconds)',
+		'ttd |cFFFFD000[seconds]|r  - minimum enemy lifetime to use cooldowns on (default is 8 seconds, ignored on bosses)',
 		'pot |cFF00C000on|r/|cFFC00000off|r - show flasks and battle potions in cooldown UI',
 		'trinket |cFF00C000on|r/|cFFC00000off|r - show on-use trinkets in cooldown UI',
 		'mend |cFFFFD000[percent]|r  - health percentage to recommend Mend Pet at (default is 65%, 0 to disable)',
-		'|cFFFFD000reset|r - reset the location of the Good Hunting UI to default',
+		'|cFFFFD000reset|r - reset the location of the ' .. ADDON .. ' UI to default',
 	} do
 		print('  ' .. SLASH_GoodHunting1 .. ' ' .. cmd)
 	end
