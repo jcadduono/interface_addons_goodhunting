@@ -752,6 +752,9 @@ local CallPet = Ability:Add(883, false, true)
 local CounterShot = Ability:Add(147362, false, true)
 CounterShot.cooldown_duration = 24
 CounterShot.triggers_gcd = false
+local KillShot = Ability:Add({320976, 53351}, false, true)
+KillShot.cooldown_duration = 10
+KillShot.focus_cost = 10
 local MendPet = Ability:Add(136, true, true)
 MendPet.cooldown_duration = 10
 MendPet.buff_duration = 10
@@ -958,9 +961,15 @@ local WildfireInfusion = Ability:Add(271014, false, true)
 ------ Procs
 
 -- Covenant abilities
-local WildSpirits = Ability:Add(328231, false, true)
+local WildSpirits = Ability:Add(328231, false, true) -- Night Fae
 WildSpirits.cooldown_duration = 120
 WildSpirits.buff_duration = 15
+local FlayedShot = Ability:Add(324149, false, true) -- Necrolord
+FlayedShot.cooldown_duration = 30
+FlayedShot.buff_duration = 14
+FlayedShot.tick_interval = 2
+local FlayersMark = Ability:Add(324156, true, true) -- triggered by Flayed Shot ticks
+FlayersMark.buff_duration = 12
 -- Soulbind conduits
 
 -- Legendary effects
@@ -1214,6 +1223,9 @@ function Player:UpdateAbilities()
 		BeastCleave.known = true
 		BeastCleave.pet.known = true
 	end
+	if FlayedShot.known then
+		FlayersMark.known = true
+	end
 
 	abilities.bySpellId = {}
 	abilities.velocity = {}
@@ -1335,6 +1347,13 @@ function SerpentSting:Cost()
 		return 0
 	end
 	return Ability.Cost(self)
+end
+
+function KillShot:Usable()
+	if (not FlayersMark.known or FlayersMark:Down()) and Target.healthPercentage >= 20 then
+		return false
+	end
+	return Ability.Usable(self)
 end
 
 -- hack to support Wildfire Bomb's changing spells on each cast
@@ -1736,6 +1755,8 @@ end
 APL[SPEC.SURVIVAL].st = function(self)
 --[[
 actions.st=harpoon,if=talent.terms_of_engagement.enabled
+actions.st+=/flayed_shot
+actions.st+=/kill_shot
 actions.st+=/flanking_strike,if=focus+cast_regen<focus.max
 actions.st+=/raptor_strike,if=buff.coordinated_assault.up&buff.coordinated_assault.remains<1.5*gcd
 # To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
@@ -1754,6 +1775,12 @@ actions.st+=/serpent_sting,if=buff.vipers_venom.up
 ]]
 	if TermsOfEngagement.known and Harpoon:Usable() then
 		UseCooldown(Harpoon)
+	end
+	if FlayedShot:Usable() then
+		return FlayedShot
+	end
+	if KillShot:Usable() then
+		return KillShot
 	end
 	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
 		return FlankingStrike
@@ -1807,6 +1834,8 @@ APL[SPEC.SURVIVAL].apst = function(self)
 --[[
 actions.apst=mongoose_bite,if=buff.coordinated_assault.up&buff.coordinated_assault.remains<1.5*gcd
 actions.apst+=/raptor_strike,if=buff.coordinated_assault.up&buff.coordinated_assault.remains<1.5*gcd
+actions.apst+=/flayed_shot
+actions.apst+=/kill_shot
 actions.apst+=/flanking_strike,if=focus+cast_regen<focus.max
 actions.apst+=/kill_command,target_if=min:bloodseeker.remains,if=full_recharge_time<1.5*gcd&focus+cast_regen<focus.max
 actions.apst+=/steel_trap,if=focus+cast_regen<focus.max
@@ -1827,6 +1856,12 @@ actions.apst+=/wildfire_bomb,if=!ticking
 		if RaptorStrike:Usable() then
 			return RaptorStrike
 		end
+	end
+	if FlayedShot:Usable() then
+		return FlayedShot
+	end
+	if KillShot:Usable() then
+		return KillShot
 	end
 	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
 		return FlankingStrike
@@ -1867,6 +1902,8 @@ APL[SPEC.SURVIVAL].wfi = function(self)
 actions.wfi=harpoon,if=focus+cast_regen<focus.max&talent.terms_of_engagement.enabled
 actions.wfi+=/serpent_sting,if=buff.vipers_venom.up&buff.vipers_venom.remains<1.5*gcd|!dot.serpent_sting.ticking
 actions.wfi+=/wildfire_bomb,if=full_recharge_time<1.5*gcd&focus+cast_regen<focus.max|(next_wi_bomb.volatile&dot.serpent_sting.ticking&dot.serpent_sting.refreshable|next_wi_bomb.pheromone&!buff.mongoose_fury.up&focus+cast_regen<focus.max-action.kill_command.cast_regen*3)
+actions.wfi+=/flayed_shot
+actions.wfi+=/kill_shot
 actions.wfi+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max-focus.regen
 actions.wfi+=/a_murder_of_crows
 actions.wfi+=/steel_trap,if=focus+cast_regen<focus.max
@@ -1890,6 +1927,12 @@ actions.wfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|n
 	end
 	if WildfireBomb:Usable() and ((WildfireBomb:WontCapFocus() and WildfireBomb:FullRechargeTime() < (1.5 * Player.gcd)) or (VolatileBomb.next and SerpentSting:Remains() > WildfireBomb:TravelTime() and SerpentSting:Refreshable()) or (PheromoneBomb.next and not MongooseFury:Up() and WildfireBomb:WontCapFocus(KillCommand:CastRegen() * 3))) then
 		return WildfireBomb
+	end
+	if FlayedShot:Usable() then
+		return FlayedShot
+	end
+	if KillShot:Usable() then
+		return KillShot
 	end
 	if KillCommand:Usable() and KillCommand:WontCapFocus(Player.focus_regen) then
 		return KillCommand
@@ -1938,9 +1981,11 @@ end
 APL[SPEC.SURVIVAL].apwfi = function(self)
 --[[
 actions.apwfi=serpent_sting,if=!dot.serpent_sting.ticking
+actions.apwfi+=/flayed_shot
 actions.apwfi+=/a_murder_of_crows
 actions.apwfi+=/wildfire_bomb,if=full_recharge_time<1.5*gcd|focus+cast_regen<focus.max&(next_wi_bomb.volatile&dot.serpent_sting.ticking&dot.serpent_sting.refreshable|next_wi_bomb.pheromone&!buff.mongoose_fury.up&focus+cast_regen<focus.max-action.kill_command.cast_regen*3)
 actions.apwfi+=/coordinated_assault
+actions.apwfi+=/kill_shot
 actions.apwfi+=/mongoose_bite,if=buff.mongoose_fury.remains&next_wi_bomb.pheromone
 actions.apwfi+=/kill_command,target_if=min:bloodseeker.remains,if=full_recharge_time<1.5*gcd&focus+cast_regen<focus.max-20
 actions.apwfi+=/steel_trap,if=focus+cast_regen<focus.max
@@ -1957,6 +2002,9 @@ actions.apwfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking
 	if SerpentSting:Usable() and SerpentSting:Down() then
 		return SerpentSting
 	end
+	if FlayedShot:Usable() then
+		return FlayedShot
+	end
 	if AMurderOfCrows:Usable() then
 		UseCooldown(AMurderOfCrows)
 	end
@@ -1965,6 +2013,9 @@ actions.apwfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking
 	end
 	if CoordinatedAssault:Usable() then
 		UseCooldown(CoordinatedAssault)
+	end
+	if KillShot:Usable() then
+		return KillShot
 	end
 	if MongooseBite:Usable() and PheromoneBomb.next and MongooseFury:Up() then
 		return MongooseBite
@@ -2023,6 +2074,8 @@ actions.cleave+=/flanking_strike,if=focus+cast_regen<focus.max
 actions.cleave+=/wildfire_bomb,if=dot.wildfire_bomb.refreshable|talent.wildfire_infusion.enabled
 actions.cleave+=/serpent_sting,target_if=min:remains,if=buff.vipers_venom.react
 actions.cleave+=/carve,if=cooldown.wildfire_bomb.remains>variable.carve_cdr%2
+actions.cleave+=/kill_shot
+actions.cleave+=/flayed_shot
 actions.cleave+=/steel_trap
 actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&buff.tip_of_the_spear.stack<3&next_wi_bomb.volatile|refreshable&legendary.latent_poison_injectors.enabled
 # To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
@@ -2077,6 +2130,12 @@ actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
 	end
 	if Carve:Usable() and WildfireBomb:Cooldown() > (carve_cdr / 2) then
 		return Carve
+	end
+	if KillShot:Usable() then
+		return KillShot
+	end
+	if FlayedShot:Usable() then
+		return FlayedShot
 	end
 	if SteelTrap:Usable() then
 		UseCooldown(SteelTrap)
