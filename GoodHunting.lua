@@ -97,6 +97,7 @@ local function InitOpts()
 		pot = false,
 		trinket = true,
 		shot_timer = true,
+		mend_threshold = 65,
 	})
 end
 
@@ -142,6 +143,7 @@ local Player = {
 		next_tick = 0,
 		per_tick = 0,
 		time_until_tick = 0,
+		fsr_break = 0,
 	},
 	group_size = 1,
 	moving = false,
@@ -153,6 +155,12 @@ local Player = {
 	},
 	swing = {
 		last_taken = 0,
+	},
+	pet = {
+		guid = 0,
+		active = false,
+		alive = false,
+		stuck = false,
 	},
 	previous_gcd = {},-- list of previous GCD abilities
 	item_use_blacklist = { -- list of item IDs with on-use effects we should mark unusable
@@ -277,6 +285,8 @@ ghExtraPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
 ghExtraPanel.border = ghExtraPanel:CreateTexture(nil, 'ARTWORK')
 ghExtraPanel.border:SetAllPoints(ghExtraPanel)
 ghExtraPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
+local ghScanTooltip = CreateFrame('GameTooltip', 'ghScanTooltip', nil, 'GameTooltipTemplate')
+ghScanTooltip:SetOwner(UIParent, 'ANCHOR_NONE')
 
 -- Start AoE
 
@@ -419,6 +429,7 @@ function Ability:Add(spellId, buff, player)
 		icon = false,
 		requires_charge = false,
 		requires_react = false,
+		requires_pet = false,
 		triggers_combat = false,
 		triggers_gcd = true,
 		hasted_duration = false,
@@ -472,10 +483,23 @@ function Ability:Usable(seconds)
 	if self.requires_charge and self:Charges() == 0 then
 		return false
 	end
-	if self.requires_react and self:Down() then
+	if self.requires_react and self:React() == 0 then
+		return false
+	end
+	if self.requires_pet and not Player.pet.active then
 		return false
 	end
 	return self:Ready(seconds)
+end
+
+function Ability:React()
+	if self.aura_targets then
+		local guid = self.auraTarget == 'player' and Player.guid or Target.guid
+		if self.aura_targets[guid] then
+			return max(0, self.aura_targets[guid].expires - Player.time - Player.execute_remains)
+		end
+	end
+	return 0
 end
 
 function Ability:Remains(mine)
@@ -790,31 +814,70 @@ end
 ---- General
 
 ---- Beast Mastery
-
+local AspectOfTheHawk = Ability:Add({13165, 14318, 14319, 14320, 14321, 14322, 25296, 27044}, true, true)
+AspectOfTheHawk.mana_costs = {20, 35, 50, 70, 90, 110, 120, 140}
+local CallPet = Ability:Add({883}, false, true)
+local FeedPet = Ability:Add({6991}, true, true)
+FeedPet.buff_duration = 20
+FeedPet.tick_interval = 2
+FeedPet.auraTarget = 'pet'
+FeedPet.requires_pet = true
+local MendPet = Ability:Add({136, 3111, 3661, 3662, 13542, 13543, 13544, 27046}, true, true)
+MendPet.mana_costs = {40, 70, 100, 130, 165, 200, 250, 300}
+MendPet.buff_duration = 15
+MendPet.tick_interval = 3
+MendPet.auraTarget = 'pet'
+MendPet.requires_pet = true
+local RevivePet = Ability:Add({982}, false, true)
+RevivePet.mana_cost_pct = 80
 ------ Talents
 
 ------ Procs
 
 ---- Marksmanship
+local AimedShot = Ability:Add({19434, 20900, 20901, 20902, 20903, 20904, 27065}, false, true)
+AimedShot.mana_costs = {75, 115, 160, 210, 260, 310, 370}
+AimedShot.cooldown_duration = 6
+AimedShot:SetVelocity(35)
+local ArcaneShot = Ability:Add({3044, 14281, 14282, 14283, 14284, 14285, 14286, 14287, 27019}, false, true)
+ArcaneShot.mana_costs = {25, 35, 50, 80, 105, 135, 160, 190, 230}
+ArcaneShot.cooldown_duration = 6
+ArcaneShot:SetVelocity(35)
 local AutoShot = Ability:Add({75}, false, true)
 AutoShot.next = 0
 AutoShot.last = 0
 AutoShot.speed = 0
+AutoShot.base_speed = 0
+local HuntersMark = Ability:Add({1130, 14323, 14324, 14325})
+HuntersMark.mana_costs = {15, 30, 45, 60}
+HuntersMark.buff_duration = 120
+HuntersMark:TrackAuras()
+local MultiShot = Ability:Add({2643, 14288, 14289, 14290, 25294, 27021}, false, true)
+MultiShot.mana_costs = {100, 140, 175, 210, 230, 275}
+MultiShot.cooldown_duration = 10
+MultiShot:AutoAoe()
 local SerpentSting = Ability:Add({1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 27016}, false, true)
 SerpentSting.mana_costs = {15, 30, 50, 80, 115, 150, 190, 230, 250, 275}
 SerpentSting.buff_duration = 15
 SerpentSting.tick_interval = 3
 SerpentSting:SetVelocity(35)
+SerpentSting:TrackAuras()
 ------ Talents
 
 ------ Procs
 
 ---- Survival
+local ImmolationTrap = Ability:Add({13795, 14302, 14303, 14304, 14305, 27023}, false, true)
+ImmolationTrap.mana_costs = {50, 90, 135, 190, 245, 305}
+ImmolationTrap.cooldown_duration = 30
+ImmolationTrap.dot = Ability:Add({13797, 14298, 14299, 14300, 14301, 27024}, false, true)
+ImmolationTrap.dot.buff_duration = 15
+ImmolationTrap.dot.tick_interval = 3
 local RaptorStrike = Ability:Add({2973, 14260, 14261, 14262, 14263, 14264, 14265, 14266, 27014}, false, true)
 RaptorStrike.mana_costs = {15, 25, 35, 45, 55, 70, 85, 100, 120}
 RaptorStrike.cooldown_duration = 6
 RaptorStrike.swing_queue = true
-local MongooseBite = Ability:Add({1495, 14269, 14270, 14271, 36916}, false, true)
+local MongooseBite = Ability:Add({1495, 14269, 14270, 14271, 36916}, true, true)
 MongooseBite.mana_costs = {30, 40, 50, 65, 80}
 MongooseBite.buff_duration = 5 -- use 5 second imaginary buff triggered by dodge
 MongooseBite.cooldown_duration = 5
@@ -918,6 +981,7 @@ function Player:ManaTick(timerTrigger)
 		(not timerTrigger and mana > self.mana.tick_mana) or
 		(timerTrigger and mana >= self.mana.max)
 	) then
+		self.mana.tick_interval = (time - self.mana.fsr_break) > 5 and 2 or 5
 		self.mana.next_tick = time + self.mana.tick_interval
 		if mana >= self.mana.max then
 			C_Timer.After(self.mana.tick_interval, function() Player:ManaTick(true) end)
@@ -982,6 +1046,12 @@ function Player:UpdateAbilities()
 		ability.name, _, ability.icon = GetSpellInfo(ability.spellId)
 	end
 
+	if ImmolationTrap.known then
+		ImmolationTrap.dot.known = true
+		ImmolationTrap.dot.rank = ImmolationTrap.rank
+		ImmolationTrap.dot.spellId = ImmolationTrap.dot.spellIds[ImmolationTrap.dot.rank]
+	end
+
 	abilities.bySpellId = {}
 	abilities.velocity = {}
 	abilities.autoAoe = {}
@@ -1018,6 +1088,15 @@ function Player:UpdateThreat()
 	end
 end
 
+function Player:UpdatePet()
+	self.pet.guid = UnitGUID('pet')
+	self.pet.alive = self.pet.guid and not UnitIsDead('pet') and true
+	self.pet.active = (self.pet.alive and not self.pet.stuck or IsFlying()) and true
+	self.pet.health = self.pet.alive and UnitHealth('pet') or 0
+	self.pet.health_max = self.pet.alive and UnitHealthMax('pet') or 0
+	self.pet.happiness = self.pet.alive and GetPetHappiness() or 2
+end
+
 function Player:Update()
 	local _, start, duration, remains, spellId, speed, max_speed
 	self.ctime = GetTime()
@@ -1049,6 +1128,7 @@ function Player:Update()
 	self.moving = speed ~= 0
 	self.movement_speed = max_speed / 7 * 100
 	self:UpdateThreat()
+	self:UpdatePet()
 
 	trackAuras:Purge()
 	if Opt.auto_aoe then
@@ -1184,6 +1264,44 @@ function AutoShot:Remains()
 	return max(0, self.next - Player.time - Player.execute_remains)
 end
 
+function SerpentSting:Usable()
+	if Target.creature_type == 'Mechanical' then
+		return false
+	end
+	return Ability.Usable(self)
+end
+
+function CallPet:Usable()
+	if Player.pet.active then
+		return false
+	end
+	return Ability.Usable(self)
+end
+
+function FeedPet:Usable()
+	if Player.pet.happiness >= 3 then
+		return false
+	end
+	return Ability.Usable(self)
+end
+
+function MendPet:Usable()
+	if not Player.pet.alive then
+		return false
+	end
+	if Opt.mend_threshold == 0 or (Player.pet.health / Player.pet.health_max * 100) >= Opt.mend_threshold then
+		return false
+	end
+	return Ability.Usable(self)
+end
+
+function RevivePet:Usable()
+	if not Player.pet.guid or Player.pet.alive then
+		return false
+	end
+	return Ability.Usable(self)
+end
+
 -- End Ability Modifications
 
 local function UseCooldown(ability, overwrite)
@@ -1208,13 +1326,35 @@ end
 local APL = {}
 
 APL.main = function(self)
-	if Player:TimeInCombat() == 0 then
-
-	else
-
+	if CallPet:Usable() then
+		UseExtra(CallPet)
+	elseif RevivePet:Usable() then
+		UseExtra(RevivePet)
+	elseif MendPet:Usable() then
+		UseExtra(MendPet)
+	elseif FeedPet:Usable() and FeedPet:Down() and Player:TimeInCombat() == 0 then
+		UseExtra(FeedPet)
 	end
-	if SerpentSting:Usable() and SerpentSting:Down() then
-		return SerpentSting
+	if Player:TimeInCombat() == 0 then
+		if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() then
+			return AspectOfTheHawk
+		end
+		if HuntersMark:Usable() and HuntersMark:Down() then
+			return HuntersMark
+		end
+		if AimedShot:Usable() then
+			return AimedShot
+		end
+	else
+		if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() then
+			UseExtra(AspectOfTheHawk)
+		end
+		if HuntersMark:Usable() and HuntersMark:Down() and HuntersMark:Ticking() == 0 then
+			UseCooldown(HuntersMark)
+		end
+	end
+	if ImmolationTrap:Usable() and Player:UnderMeleeAttack() then
+		UseCooldown(ImmolationTrap)
 	end
 	if Player.threat.status >= 3 and Player:UnderMeleeAttack() then
 		if RaptorStrike:Usable() then
@@ -1223,6 +1363,18 @@ APL.main = function(self)
 		if MongooseBite:Usable() then
 			return MongooseBite
 		end
+	end
+	if MultiShot:Usable() and Player.enemies >= 3 then
+		return MultiShot
+	end
+	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 3) then
+		return SerpentSting
+	end
+	if ArcaneShot:Usable() then
+		return ArcaneShot
+	end
+	if MultiShot:Usable() then
+		return MultiShot
 	end
 end
 
@@ -1547,32 +1699,52 @@ CombatEvent.UNIT_DIED = function(event, srcGUID, dstGUID)
 end
 
 CombatEvent.SWING_DAMAGE = function(event, srcGUID, dstGUID, amount, overkill, spellSchool, resisted, blocked, absorbed, critical, glancing, crushing, offHand)
+	if Player.pet.stuck and srcGUID == Player.pet.guid then
+		Player.pet.stuck = false
+		return
+	end
+	if not (dstGUID == Player.guid or dstGUID == Player.pet.guid) then
+		return
+	end
 	if dstGUID == Player.guid then
 		Player.swing.last_taken = Player.time
-		if Opt.auto_aoe then
-			autoAoe:Add(srcGUID, true)
-		end
+	end
+	if Opt.auto_aoe then
+		autoAoe:Add(srcGUID, true)
 	end
 end
 
 CombatEvent.SWING_MISSED = function(event, srcGUID, dstGUID, missType, offHand, amountMissed)
+	if Player.pet.stuck and srcGUID == Player.pet.guid then
+		Player.pet.stuck = false
+		return
+	end
+	if not (dstGUID == Player.guid or dstGUID == Player.pet.guid) then
+		return
+	end
 	if dstGUID == Player.guid then
 		Player.swing.last_taken = Player.time
 		if MongooseBite.known and missType == 'DODGE' then
 			MongooseBite:ApplyAura(dstGUID)
 		end
-		if Opt.auto_aoe then
-			autoAoe:Add(srcGUID, true)
-		end
+	end
+	if Opt.auto_aoe then
+		autoAoe:Add(srcGUID, true)
 	end
 end
 
 CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellSchool, missType, _, _, resisted, blocked, absorbed, critical)
-	if event == 'SPELL_MISSED' then
-		if dstGUID == Player.guid then
-			if MongooseBite.known and missType == 'DODGE' then
-				MongooseBite:ApplyAura(dstGUID)
-			end
+	if event == 'SPELL_MISSED' and dstGUID == Player.guid then
+		if MongooseBite.known and missType == 'DODGE' then
+			MongooseBite:ApplyAura(dstGUID)
+		end
+	end
+
+	if srcGUID == Player.pet.guid then
+		if Player.pet.stuck and (event == 'SPELL_CAST_SUCCESS' or event == 'SPELL_DAMAGE') then
+			Player.pet.stuck = false
+		elseif not Player.pet.stuck and event == 'SPELL_CAST_FAILED' and missType == 'No path available' then
+			Player.pet.stuck = true
 		end
 	end
 
@@ -1585,7 +1757,7 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 		--print(format('EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d', event, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0))
 		return
 	end
-	
+
 	if ability == AutoShot then
 		if event == 'SPELL_CAST_START' then
 			ability:CastStart(dstGUID)
@@ -1606,8 +1778,17 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 			ghPreviousPanel.icon:SetTexture(ability.icon)
 			ghPreviousPanel:Show()
 		end
+		if ability.aura_targets and ability.requires_react then
+			ability:RemoveAura(ability.auraTarget == 'player' and srcGUID or dstGUID)
+		end
+		return
+	elseif event == 'SPELL_CAST_FAILED' then
+		if ability.requires_pet and missType == 'No path available' then
+			Player.pet.stuck = true
+		end
 		return
 	end
+
 	if dstGUID == Player.guid then
 		return -- ignore buffs beyond here
 	end
@@ -1662,6 +1843,7 @@ end
 function events:PLAYER_REGEN_ENABLED()
 	Player.combat_start = 0
 	Player.swing.last_taken = 0
+	Player.pet.stuck = false
 	Target.estimated_range = 30
 	Player.previous_gcd = {}
 	if Player.last_ability then
@@ -1712,6 +1894,22 @@ function events:PLAYER_EQUIPMENT_CHANGED()
 			inventoryItems[i].can_use = false
 		end
 	end
+	equipType = GetInventoryItemLink('player', 18)
+	if equipType then
+		local speed
+		ghScanTooltip:SetHyperlink(equipType)
+		for i = 2, 4 do
+			speed = _G['ghScanTooltipTextRight' .. i]:GetText()
+			if speed and speed:find(WEAPON_SPEED) then
+				speed = speed:match('[%d.]+')
+				if speed then
+					AutoShot.base_speed = tonumber(speed)
+					break
+				end
+			end
+		end
+		ghScanTooltip:ClearLines()
+	end
 	Player:UpdateAbilities()
 end
 
@@ -1726,6 +1924,16 @@ function events:SPELL_UPDATE_COOLDOWN()
 			start, duration = GetSpellCooldown(47524)
 		end
 		ghPanel.swipe:SetCooldown(start, duration)
+	end
+end
+
+function events:UI_ERROR_MESSAGE(errorId)
+	if (
+	    errorId == 394 or -- pet is rooted
+	    errorId == 396 or -- target out of pet range
+	    errorId == 400    -- no pet path to target
+	) then
+		Player.pet.stuck = true
 	end
 end
 
@@ -1781,6 +1989,17 @@ function events:UNIT_SPELLCAST_SUCCEEDED(srcName, castGUID, spellId)
 	end
 	if ability.swing_queue then
 		ability.queue_time = nil
+	end
+	if ability.mana_cost > 0 then
+		Player.mana.fsr_break = GetTime()
+	end
+end
+
+function events:UNIT_POWER_FREQUENT(srcName, powerType)
+	if srcName ~= 'player' then
+		return
+	elseif powerType == 'MANA' then
+		Player:ManaTick()
 	end
 end
 
@@ -2067,6 +2286,12 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		end
 		return Status('Show time remaining until next auto-shot (top-left)', Opt.shot_timer)
 	end
+	if startsWith(msg[1], 'me') then
+		if msg[2] then
+			Opt.mend_threshold = tonumber(msg[2]) or 65
+		end
+		return Status('Recommend Mend Pet when pet\'s health is below', Opt.mend_threshold .. '%')
+	end
 	if msg[1] == 'reset' then
 		ghPanel:ClearAllPoints()
 		ghPanel:SetPoint('CENTER', 0, -169)
@@ -2096,6 +2321,7 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		'pot |cFF00C000on|r/|cFFC00000off|r - show flasks and battle potions in cooldown UI',
 		'trinket |cFF00C000on|r/|cFFC00000off|r - show on-use trinkets in cooldown UI',
 		'shot |cFF00C000on|r/|cFFC00000off|r - show time remaining until next auto-shot',
+		'mend |cFFFFD000[percent]|r  - health percentage to recommend Mend Pet at (default is 65%, 0 to disable)',
 		'|cFFFFD000reset|r - reset the location of the ' .. ADDON .. ' UI to default',
 	} do
 		print('  ' .. SLASH_GoodHunting1 .. ' ' .. cmd)
