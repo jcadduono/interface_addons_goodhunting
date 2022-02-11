@@ -814,14 +814,17 @@ end
 ---- General
 
 ---- Beast Mastery
+local AspectOfTheCheetah = Ability:Add({5118}, true, true)
+AspectOfTheCheetah.mana_cost = 40
 local AspectOfTheHawk = Ability:Add({13165, 14318, 14319, 14320, 14321, 14322, 25296, 27044}, true, true)
 AspectOfTheHawk.mana_costs = {20, 35, 50, 70, 90, 110, 120, 140}
 local CallPet = Ability:Add({883}, false, true)
 local FeedPet = Ability:Add({6991}, true, true)
-FeedPet.buff_duration = 20
-FeedPet.tick_interval = 2
-FeedPet.auraTarget = 'pet'
 FeedPet.requires_pet = true
+local FeedPet.buff = Ability:Add({1539}, true, true)
+FeedPet.buff.buff_duration = 20
+FeedPet.buff.tick_interval = 2
+FeedPet.buff.auraTarget = 'pet'
 local MendPet = Ability:Add({136, 3111, 3661, 3662, 13542, 13543, 13544, 27046}, true, true)
 MendPet.mana_costs = {40, 70, 100, 130, 165, 200, 250, 300}
 MendPet.buff_duration = 15
@@ -1051,6 +1054,9 @@ function Player:UpdateAbilities()
 		ImmolationTrap.dot.rank = ImmolationTrap.rank
 		ImmolationTrap.dot.spellId = ImmolationTrap.dot.spellIds[ImmolationTrap.dot.rank]
 	end
+	if FeedPet.known then
+		FeedPet.buff.known = true
+	end
 
 	abilities.bySpellId = {}
 	abilities.velocity = {}
@@ -1194,7 +1200,7 @@ function Target:Update()
 		self.creature_type = 'Humanoid'
 		self.player = false
 		self.level = Player.level
-		self.hostile = true
+		self.hostile = false
 		self:UpdateHealth(true)
 		if Opt.always_on then
 			UI:UpdateCombat()
@@ -1282,6 +1288,9 @@ function FeedPet:Usable()
 	if Player.pet.happiness >= 3 then
 		return false
 	end
+	if self.buff:Up() then
+		return false
+	end
 	return Ability.Usable(self)
 end
 
@@ -1332,12 +1341,18 @@ APL.main = function(self)
 		UseExtra(RevivePet)
 	elseif MendPet:Usable() then
 		UseExtra(MendPet)
-	elseif FeedPet:Usable() and FeedPet:Down() and Player:TimeInCombat() == 0 then
+	elseif FeedPet:Usable() and Player:TimeInCombat() == 0 then
 		UseExtra(FeedPet)
 	end
 	if Player:TimeInCombat() == 0 then
-		if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() then
-			return AspectOfTheHawk
+		if Target.hostile then
+			if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() then
+				return AspectOfTheHawk
+			end
+		else
+			if AspectOfTheCheetah:Usable() and Player.moving and AspectOfTheCheetah:Down() and not IsMounted() then
+				return AspectOfTheCheetah
+			end
 		end
 		if HuntersMark:Usable() and HuntersMark:Down() then
 			return HuntersMark
@@ -1367,7 +1382,7 @@ APL.main = function(self)
 	if MultiShot:Usable() and Player.enemies >= 3 then
 		return MultiShot
 	end
-	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 3) then
+	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 4) then
 		return SerpentSting
 	end
 	if ArcaneShot:Usable() then
