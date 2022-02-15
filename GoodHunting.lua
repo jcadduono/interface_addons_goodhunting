@@ -821,7 +821,7 @@ AspectOfTheHawk.mana_costs = {20, 35, 50, 70, 90, 110, 120, 140}
 local CallPet = Ability:Add({883}, false, true)
 local FeedPet = Ability:Add({6991}, true, true)
 FeedPet.requires_pet = true
-local FeedPet.buff = Ability:Add({1539}, true, true)
+FeedPet.buff = Ability:Add({1539}, true, true)
 FeedPet.buff.buff_duration = 20
 FeedPet.buff.tick_interval = 2
 FeedPet.buff.auraTarget = 'pet'
@@ -841,6 +841,7 @@ RevivePet.mana_cost_pct = 80
 local AimedShot = Ability:Add({19434, 20900, 20901, 20902, 20903, 20904, 27065}, false, true)
 AimedShot.mana_costs = {75, 115, 160, 210, 260, 310, 370}
 AimedShot.cooldown_duration = 6
+AimedShot.triggers_combat = true
 AimedShot:SetVelocity(35)
 local ArcaneShot = Ability:Add({3044, 14281, 14282, 14283, 14284, 14285, 14286, 14287, 27019}, false, true)
 ArcaneShot.mana_costs = {25, 35, 50, 80, 105, 135, 160, 190, 230}
@@ -859,6 +860,10 @@ local MultiShot = Ability:Add({2643, 14288, 14289, 14290, 25294, 27021}, false, 
 MultiShot.mana_costs = {100, 140, 175, 210, 230, 275}
 MultiShot.cooldown_duration = 10
 MultiShot:AutoAoe()
+local RapidFire = Ability:Add({3045}, true, true)
+RapidFire.mana_cost = 100
+RapidFire.buff_duration = 15
+RapidFire.cooldown_duration = 300
 local SerpentSting = Ability:Add({1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 27016}, false, true)
 SerpentSting.mana_costs = {15, 30, 50, 80, 115, 150, 190, 230, 250, 275}
 SerpentSting.buff_duration = 15
@@ -866,10 +871,17 @@ SerpentSting.tick_interval = 3
 SerpentSting:SetVelocity(35)
 SerpentSting:TrackAuras()
 ------ Talents
-
+local RapidKilling = Ability:Add({34948, 34949}, true, true)
+RapidKilling.buff = Ability:Add({35098, 35099}, true, true)
+RapidKilling.buff.buff_duration = 20
 ------ Procs
 
 ---- Survival
+local FeignDeath = Ability:Add({5384}, true, true)
+FeignDeath.mana_cost = 80
+FeignDeath.cooldown_duration = 30
+FeignDeath.buff_duration = 360
+FeignDeath.triggers_gcd = false
 local ImmolationTrap = Ability:Add({13795, 14302, 14303, 14304, 14305, 27023}, false, true)
 ImmolationTrap.mana_costs = {50, 90, 135, 190, 245, 305}
 ImmolationTrap.cooldown_duration = 30
@@ -892,8 +904,9 @@ MongooseBite:TrackAuras()
 
 -- Racials
 
--- Class Debuffs
-
+-- Class Buffs/Debuffs
+local Bloodlust = Ability:Add({2825, 32183}, true)
+Bloodlust.buff_duration = 40
 -- Trinket Effects
 
 -- End Abilities
@@ -1049,13 +1062,18 @@ function Player:UpdateAbilities()
 		ability.name, _, ability.icon = GetSpellInfo(ability.spellId)
 	end
 
+	if FeedPet.known then
+		FeedPet.buff.known = true
+	end
 	if ImmolationTrap.known then
 		ImmolationTrap.dot.known = true
 		ImmolationTrap.dot.rank = ImmolationTrap.rank
 		ImmolationTrap.dot.spellId = ImmolationTrap.dot.spellIds[ImmolationTrap.dot.rank]
 	end
-	if FeedPet.known then
-		FeedPet.buff.known = true
+	if RapidKilling.known then
+		RapidKilling.buff.known = true
+		RapidKilling.buff.rank = RapidKilling.rank
+		RapidKilling.buff.spellId = RapidKilling.buff.spellIds[RapidKilling.buff.rank]
 	end
 
 	abilities.bySpellId = {}
@@ -1270,6 +1288,14 @@ function AutoShot:Remains()
 	return max(0, self.next - Player.time - Player.execute_remains)
 end
 
+function RapidFire:CooldownDuration()
+	local duration = Ability.CooldownDuration(self)
+	if RapidKilling.known then
+		duration = duration - (60 * RapidKilling.rank)
+	end
+	return max(0, duration)
+end
+
 function SerpentSting:Usable()
 	if Target.creature_type == 'Mechanical' then
 		return false
@@ -1288,9 +1314,6 @@ function FeedPet:Usable()
 	if Player.pet.happiness >= 3 then
 		return false
 	end
-	if self.buff:Up() then
-		return false
-	end
 	return Ability.Usable(self)
 end
 
@@ -1306,6 +1329,9 @@ end
 
 function RevivePet:Usable()
 	if not Player.pet.guid or Player.pet.alive then
+		return false
+	end
+	if self:Casting() then
 		return false
 	end
 	return Ability.Usable(self)
@@ -1339,9 +1365,9 @@ APL.main = function(self)
 		UseExtra(CallPet)
 	elseif RevivePet:Usable() then
 		UseExtra(RevivePet)
-	elseif MendPet:Usable() then
+	elseif MendPet:Usable() and MendPet:Down() then
 		UseExtra(MendPet)
-	elseif FeedPet:Usable() and Player:TimeInCombat() == 0 then
+	elseif FeedPet:Usable() and FeedPet:Down() and Player:TimeInCombat() == 0 then
 		UseExtra(FeedPet)
 	end
 	if Player:TimeInCombat() == 0 then
@@ -1350,7 +1376,7 @@ APL.main = function(self)
 				return AspectOfTheHawk
 			end
 		else
-			if AspectOfTheCheetah:Usable() and Player.moving and AspectOfTheCheetah:Down() and not IsMounted() then
+			if AspectOfTheCheetah:Usable() and Player.moving and AspectOfTheCheetah:Down() and not (IsMounted() or IsSwimming() or UnitOnTaxi('player')) then
 				return AspectOfTheCheetah
 			end
 		end
@@ -1364,32 +1390,37 @@ APL.main = function(self)
 		if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() then
 			UseExtra(AspectOfTheHawk)
 		end
+		if Player.threat.status >= 3 then
+			if FeignDeath:Usable() then
+				UseCooldown(FeignDeath)
+			end
+			if Player:UnderMeleeAttack() then
+				if RaptorStrike:Usable() then
+					UseCooldown(RaptorStrike)
+				end
+				if MongooseBite:Usable() then
+					return MongooseBite
+				end
+			end
+		end
+		if ImmolationTrap:Usable() and Player:UnderMeleeAttack() then
+			UseCooldown(ImmolationTrap)
+		end
 		if HuntersMark:Usable() and HuntersMark:Down() and HuntersMark:Ticking() == 0 then
 			UseCooldown(HuntersMark)
 		end
 	end
-	if ImmolationTrap:Usable() and Player:UnderMeleeAttack() then
-		UseCooldown(ImmolationTrap)
+	if RapidFire:Usable() and ((not Target.boss and Target.timeToDie > 15) or (Target.boss and Player:TimeInCombat() > 5 and (Bloodlust:Remains() > 10 or Target.healthPercentage < 20 or Target.timeToDie < 20 or Target.timeToDie > RapidFire:CooldownDuration() + 20))) then
+		UseCooldown(RapidFire)
 	end
-	if Player.threat.status >= 3 and Player:UnderMeleeAttack() then
-		if RaptorStrike:Usable() then
-			UseCooldown(RaptorStrike)
-		end
-		if MongooseBite:Usable() then
-			return MongooseBite
-		end
-	end
-	if MultiShot:Usable() and Player.enemies >= 3 then
+	if MultiShot:Usable() then
 		return MultiShot
-	end
-	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 4) then
-		return SerpentSting
 	end
 	if ArcaneShot:Usable() then
 		return ArcaneShot
 	end
-	if MultiShot:Usable() then
-		return MultiShot
+	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) then
+		return SerpentSting
 	end
 end
 
