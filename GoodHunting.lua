@@ -97,6 +97,7 @@ local function InitOpts()
 		pot = false,
 		trinket = true,
 		shot_timer = true,
+		steady_pad = 0.1,
 		mend_threshold = 65,
 	})
 end
@@ -859,17 +860,23 @@ HuntersMark:TrackAuras()
 local MultiShot = Ability:Add({2643, 14288, 14289, 14290, 25294, 27021}, false, true)
 MultiShot.mana_costs = {100, 140, 175, 210, 230, 275}
 MultiShot.cooldown_duration = 10
+MultiShot:SetVelocity(35)
 MultiShot:AutoAoe()
 local RapidFire = Ability:Add({3045}, true, true)
 RapidFire.mana_cost = 100
 RapidFire.buff_duration = 15
 RapidFire.cooldown_duration = 300
+RapidFire.triggers_gcd = false
 local SerpentSting = Ability:Add({1978, 13549, 13550, 13551, 13552, 13553, 13554, 13555, 25295, 27016}, false, true)
 SerpentSting.mana_costs = {15, 30, 50, 80, 115, 150, 190, 230, 250, 275}
 SerpentSting.buff_duration = 15
 SerpentSting.tick_interval = 3
 SerpentSting:SetVelocity(35)
 SerpentSting:TrackAuras()
+local SteadyShot = Ability:Add({34120}, false, true)
+SteadyShot.mana_costs = {110}
+SteadyShot.used_after_shot = false
+SteadyShot:SetVelocity(35)
 ------ Talents
 local RapidKilling = Ability:Add({34948, 34949}, true, true)
 RapidKilling.buff = Ability:Add({35098, 35099}, true, true)
@@ -877,6 +884,12 @@ RapidKilling.buff.buff_duration = 20
 ------ Procs
 
 ---- Survival
+local ExplosiveTrap = Ability:Add({13813, 14316, 14317, 27025}, false, true)
+ExplosiveTrap.mana_costs = {275, 395, 520, 650}
+ExplosiveTrap.cooldown_duration = 30
+ExplosiveTrap.dot = Ability:Add({13812, 14314, 14315, 27026}, false, true)
+ExplosiveTrap.dot.buff_duration = 20
+ExplosiveTrap.dot.tick_interval = 2
 local FeignDeath = Ability:Add({5384}, true, true)
 FeignDeath.mana_cost = 80
 FeignDeath.cooldown_duration = 30
@@ -1064,6 +1077,11 @@ function Player:UpdateAbilities()
 
 	if FeedPet.known then
 		FeedPet.buff.known = true
+	end
+	if ExplosiveTrap.known then
+		ExplosiveTrap.dot.known = true
+		ExplosiveTrap.dot.rank = ExplosiveTrap.rank
+		ExplosiveTrap.dot.spellId = ExplosiveTrap.dot.spellIds[ExplosiveTrap.dot.rank]
 	end
 	if ImmolationTrap.known then
 		ImmolationTrap.dot.known = true
@@ -1277,6 +1295,9 @@ function AutoShot:CastSuccess(...)
 	self.last = Player.time
 	self.speed = UnitRangedDamage('player')
 	self.next = self.last + self.speed
+	if SteadyShot.known then
+		SteadyShot.used_after_shot = false
+	end
 end
 
 function AutoShot:CastFailed()
@@ -1337,6 +1358,15 @@ function RevivePet:Usable()
 	return Ability.Usable(self)
 end
 
+function SteadyShot:FirstAfterShot()
+	return not (self.used_after_shot or self:Casting())
+end
+
+function SteadyShot:CastSuccess(...)
+	Ability.CastSuccess(self, ...)
+	self.used_after_shot = true
+end
+
 -- End Ability Modifications
 
 local function UseCooldown(ability, overwrite)
@@ -1361,13 +1391,13 @@ end
 local APL = {}
 
 APL.main = function(self)
-	if CallPet:Usable() then
-		UseExtra(CallPet)
-	elseif RevivePet:Usable() then
+	if RevivePet:Usable() then
 		UseExtra(RevivePet)
+	elseif CallPet:Usable() then
+		UseExtra(CallPet)
 	elseif MendPet:Usable() and MendPet:Down() then
 		UseExtra(MendPet)
-	elseif FeedPet:Usable() and FeedPet:Down() and Player:TimeInCombat() == 0 then
+	elseif FeedPet:Usable() and FeedPet.buff:Down() and Player:TimeInCombat() == 0 then
 		UseExtra(FeedPet)
 	end
 	if Player:TimeInCombat() == 0 then
@@ -1403,7 +1433,10 @@ APL.main = function(self)
 				end
 			end
 		end
-		if ImmolationTrap:Usable() and Player:UnderMeleeAttack() then
+		if ExplosiveTrap:Usable() and Player:UnderMeleeAttack() and Player.enemies > 1 then
+			UseCooldown(ExplosiveTrap)
+		end
+		if ImmolationTrap:Usable() and Player:UnderMeleeAttack() and Player.enemies == 1 then
 			UseCooldown(ImmolationTrap)
 		end
 		if HuntersMark:Usable() and HuntersMark:Down() and HuntersMark:Ticking() == 0 then
@@ -1413,13 +1446,35 @@ APL.main = function(self)
 	if RapidFire:Usable() and ((not Target.boss and Target.timeToDie > 15) or (Target.boss and Player:TimeInCombat() > 5 and (Bloodlust:Remains() > 10 or Target.healthPercentage < 20 or Target.timeToDie < 20 or Target.timeToDie > RapidFire:CooldownDuration() + 20))) then
 		UseCooldown(RapidFire)
 	end
-	if MultiShot:Usable() then
+	local no_clip = not SteadyShot.known or AutoShot:Remains() > 1
+	local use_1_1 = AutoShot.speed < (SteadyShot:CastTime() + 1 + Opt.steady_pad)
+	if Target.timeToDie < 2 then
+		if MultiShot:Usable() then
+			return MultShot
+		end
+		if ArcaneShot:Usable() then
+			return ArcaneShot
+		end
+	end
+	if MultiShot:Usable(AutoShot:Remains() - 1) and (Player.enemies >= 2 or use_1_1) and no_clip then
 		return MultiShot
 	end
-	if ArcaneShot:Usable() then
+	if ExplosiveTrap:Usable() and Player.enemies >= 3 then
+		UseCooldown(ExplosiveTrap)
+	end
+	if SteadyShot:Usable() and SteadyShot:FirstAfterShot() and no_clip then
+		return SteadyShot
+	end
+	if MultiShot:Usable() and (not SteadyShot.known or Target.timeToDie < 2 or (Player:ManaPct() > 15 and no_clip)) then
+		return MultiShot
+	end
+	if SteadyShot:Usable() and AutoShot:Remains() > (SteadyShot:CastTime() + Opt.steady_pad) then
+		return SteadyShot
+	end
+	if ArcaneShot:Usable() and (Player.moving or not SteadyShot.known or (Player:ManaPct() > 30 and no_clip)) then
 		return ArcaneShot
 	end
-	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) then
+	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) and (Player.moving or not SteadyShot.known or (Player:ManaPct() > 90 and no_clip)) then
 		return SerpentSting
 	end
 end
@@ -2332,6 +2387,12 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		end
 		return Status('Show time remaining until next auto-shot (top-left)', Opt.shot_timer)
 	end
+	if startsWith(msg[1], 'st') then
+		if msg[2] then
+			Opt.steady_pad = tonumber(msg[2]) or 0.2
+		end
+		return Status('Shorten Steady Shot window (latency pad) by', Opt.steady_pad, 'seconds')
+	end
 	if startsWith(msg[1], 'me') then
 		if msg[2] then
 			Opt.mend_threshold = tonumber(msg[2]) or 65
@@ -2367,6 +2428,7 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		'pot |cFF00C000on|r/|cFFC00000off|r - show flasks and battle potions in cooldown UI',
 		'trinket |cFF00C000on|r/|cFFC00000off|r - show on-use trinkets in cooldown UI',
 		'shot |cFF00C000on|r/|cFFC00000off|r - show time remaining until next auto-shot',
+		'steady |cFFFFD000[seconds]|r  - shorten Steady Shot window by X seconds (latency pad, default is 0.2 seconds)',
 		'mend |cFFFFD000[percent]|r  - health percentage to recommend Mend Pet at (default is 65%, 0 to disable)',
 		'|cFFFFD000reset|r - reset the location of the ' .. ADDON .. ' UI to default',
 	} do
