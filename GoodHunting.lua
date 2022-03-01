@@ -1490,15 +1490,10 @@ APL.main = function(self)
 	end
 	local no_clip = not SteadyShot.known or AutoShot:Remains() > 0.5
 	local use_1_1 = AutoShot.speed < (SteadyShot:CastTime() + 0.5 + Opt.steady_pad)
-	if Target.timeToDie < 2 then
-		if MultiShot:Usable() then
-			return MultShot
-		end
-		if ArcaneShot:Usable() then
-			return ArcaneShot
-		end
+	if ArcaneShot:Usable() and Player.enemies == 1 and Target.timeToDie < 2 then
+		return ArcaneShot
 	end
-	if MultiShot:Usable(AutoShot:Remains() - 0.5) and (Player.enemies >= 2 or use_1_1) and no_clip then
+	if MultiShot:Usable(AutoShot:Remains() - 0.5) and (use_1_1 or Player.enemies >= 2 or Target.timeToDie < 2) and no_clip then
 		return MultiShot
 	end
 	if ExplosiveTrap:Usable() and Player.enemies >= 3 then
@@ -1507,13 +1502,13 @@ APL.main = function(self)
 	if SteadyShot:Usable() and SteadyShot:FirstAfterShot() and no_clip then
 		return SteadyShot
 	end
-	if MultiShot:Usable() and (not SteadyShot.known or Target.timeToDie < 2 or (Player:ManaPct() > 15 and no_clip)) then
+	if MultiShot:Usable() and (not SteadyShot.known or Player:ManaPct() > (10 + (Target.healthPercentage / 2))) and no_clip then
 		return MultiShot
 	end
 	if SteadyShot:Usable() and AutoShot:Remains() > (SteadyShot:CastTime() + Opt.steady_pad) then
 		return SteadyShot
 	end
-	if ArcaneShot:Usable() and (Player.moving or not SteadyShot.known or (Player:ManaPct() > 30 and no_clip)) then
+	if ArcaneShot:Usable() and (Player.moving or not SteadyShot.known or (Player:ManaPct() > (10 + (Target.healthPercentage / 1.5)) and no_clip)) then
 		return ArcaneShot
 	end
 	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) and (Player.moving or not SteadyShot.known or (Player:ManaPct() > 90 and no_clip)) then
