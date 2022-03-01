@@ -100,6 +100,8 @@ local function InitOpts()
 		shot_speed = true,
 		steady_pad = 0.1,
 		mend_threshold = 65,
+		viper_low = 15,
+		viper_high = 50,
 	})
 end
 
@@ -838,6 +840,8 @@ local AspectOfTheCheetah = Ability:Add({5118}, true, true)
 AspectOfTheCheetah.mana_cost = 40
 local AspectOfTheHawk = Ability:Add({13165, 14318, 14319, 14320, 14321, 14322, 25296, 27044}, true, true)
 AspectOfTheHawk.mana_costs = {20, 35, 50, 70, 90, 110, 120, 140}
+local AspectOfTheViper = Ability:Add({34074}, true, true)
+AspectOfTheViper.mana_cost = 40
 local CallPet = Ability:Add({883}, false, true)
 local FeedPet = Ability:Add({6991}, true, true)
 FeedPet.requires_pet = true
@@ -1444,10 +1448,16 @@ APL.main = function(self)
 	end
 	if Player:TimeInCombat() == 0 then
 		if Target.hostile then
-			if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() then
+			if AspectOfTheViper:Usable() and AspectOfTheViper:Down() and Player:ManaPct() < Opt.viper_low then
+				return AspectOfTheViper
+			end
+			if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() and (not AspectOfTheViper.known or Player:ManaPct() >= Opt.viper_high or AspectOfTheViper:Down()) then
 				return AspectOfTheHawk
 			end
 		else
+			if AspectOfTheViper:Usable() and AspectOfTheViper:Down() and Player:ManaPct() < Opt.viper_high then
+				return AspectOfTheViper
+			end
 			if AspectOfTheCheetah:Usable() and Player.moving and AspectOfTheCheetah:Down() and not (IsMounted() or IsSwimming() or UnitOnTaxi('player')) then
 				return AspectOfTheCheetah
 			end
@@ -1459,8 +1469,11 @@ APL.main = function(self)
 			return AimedShot
 		end
 	else
-		if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() then
+		if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() and (not AspectOfTheViper.known or Player:ManaPct() >= Opt.viper_high or AspectOfTheViper:Down()) then
 			UseExtra(AspectOfTheHawk)
+		end
+		if AspectOfTheViper:Usable() and AspectOfTheViper:Down() and Player:ManaPct() < Opt.viper_low and Target.timeToDie > 15 then
+			UseExtra(AspectOfTheViper)
 		end
 		if Player.threat.status >= 3 then
 			if FeignDeath:Usable() then
@@ -1478,7 +1491,7 @@ APL.main = function(self)
 		if ExplosiveTrap:Usable() and Player:UnderMeleeAttack() and Player.enemies > 1 then
 			UseCooldown(ExplosiveTrap)
 		end
-		if ImmolationTrap:Usable() and Player:UnderMeleeAttack() and Player.enemies == 1 then
+		if ImmolationTrap:Usable() and Player:UnderMeleeAttack() and Player.enemies == 1 and Target.timeToDie > (ImmolationTrap.dot:TickTime() * 3) then
 			UseCooldown(ImmolationTrap)
 		end
 		if HuntersMark:Usable() and HuntersMark:Down() and HuntersMark:Ticking() == 0 then
@@ -1508,7 +1521,7 @@ APL.main = function(self)
 	if SteadyShot:Usable() and AutoShot:Remains() > (SteadyShot:CastTime() + Opt.steady_pad) then
 		return SteadyShot
 	end
-	if ArcaneShot:Usable() and (Player.moving or not SteadyShot.known or (Player:ManaPct() > (10 + (Target.healthPercentage / 1.5)) and no_clip)) then
+	if ArcaneShot:Usable() and (Player.moving or not SteadyShot.known or (Player:ManaPct() > (10 + (Target.healthPercentage / 1.5)) and no_clip and AspectOfTheViper:Down())) then
 		return ArcaneShot
 	end
 	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) and (Player.moving or not SteadyShot.known or (Player:ManaPct() > 90 and no_clip)) then
@@ -2447,6 +2460,22 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		end
 		return Status('Recommend Mend Pet when pet\'s health is below', Opt.mend_threshold .. '%')
 	end
+	if startsWith(msg[1], 'vi') then
+		if msg[2] == 'off' then
+			Opt.viper_low = 0
+			Opt.viper_high = 0
+		elseif msg[2] and msg[3] then
+			Opt.viper_low = tonumber(msg[2]) or 15
+			Opt.viper_high = tonumber(msg[3]) or 50
+		end
+		if Opt.viper_low + Opt.viper_high == 0 then
+			Status('Recommend Aspect of the Viper', false)
+		else
+			Status('Recommend Aspect of the Viper when mana is below', Opt.viper_low .. '%')
+			Status('Turn off Aspect of the Viper when mana is above', Opt.viper_high .. '%')
+		end
+		return
+	end
 	if msg[1] == 'reset' then
 		ghPanel:ClearAllPoints()
 		ghPanel:SetPoint('CENTER', 0, -169)
@@ -2479,6 +2508,7 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		'speed |cFF00C000on|r/|cFFC00000off|r - show auto-shot speed (top-right)',
 		'steady |cFFFFD000[seconds]|r  - shorten Steady Shot window by X seconds (latency pad, default is 0.2 seconds)',
 		'mend |cFFFFD000[percent]|r  - health percentage to recommend Mend Pet at (default is 65%, 0 to disable)',
+		'viper |cFFFFD000[low] [high]|r  - mana percentage to recommend Aspect of the Viper at (default is 15% to 50%)',
 		'|cFFFFD000reset|r - reset the location of the ' .. ADDON .. ' UI to default',
 	} do
 		print('  ' .. SLASH_GoodHunting1 .. ' ' .. cmd)
