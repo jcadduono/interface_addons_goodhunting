@@ -97,6 +97,7 @@ local function InitOpts()
 		pot = false,
 		trinket = true,
 		shot_timer = true,
+		shot_speed = true,
 		steady_pad = 0.1,
 		mend_threshold = 65,
 	})
@@ -128,6 +129,7 @@ local Player = {
 	combat_start = 0,
 	level = 1,
 	target_mode = 0,
+	cast_remains = 0,
 	execute_remains = 0,
 	haste_factor = 1,
 	gcd = 1.5,
@@ -730,6 +732,14 @@ function Ability:Targets()
 	return 0
 end
 
+function Ability:CastStart(dstGUID)
+	return
+end
+
+function Ability:CastFailed(dstGUID)
+	return
+end
+
 function Ability:CastSuccess(dstGUID)
 	self.last_used = Player.time
 	Player.last_ability = self
@@ -744,6 +754,15 @@ function Ability:CastSuccess(dstGUID)
 			dstGUID = dstGUID,
 		}
 		self.next_castGUID = nil
+	end
+	if Opt.previous and ghPanel:IsVisible() then
+		ghPreviousPanel.ability = self
+		ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
+		ghPreviousPanel.icon:SetTexture(self.icon)
+		ghPreviousPanel:Show()
+	end
+	if self.aura_targets and self.requires_react then
+		self:RemoveAura(self.auraTarget == 'player' and Player.guid or dstGUID)
 	end
 end
 
@@ -850,7 +869,6 @@ ArcaneShot.cooldown_duration = 6
 ArcaneShot:SetVelocity(35)
 local AutoShot = Ability:Add({75}, false, true)
 AutoShot.next = 0
-AutoShot.last = 0
 AutoShot.speed = 0
 AutoShot.base_speed = 0
 local HuntersMark = Ability:Add({1130, 14323, 14324, 14325})
@@ -1152,7 +1170,8 @@ function Player:Update()
 	self.gcd_remains = start > 0 and duration - (self.ctime - start) or 0
 	_, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
 	self.ability_casting = abilities.bySpellId[spellId]
-	self.execute_remains = max(remains and (remains / 1000 - self.ctime) or 0, self.gcd_remains)
+	self.cast_remains = remains and (remains / 1000 - self.ctime) or 0
+	self.execute_remains = max(self.cast_remains, self.gcd_remains)
 	self.health = UnitHealth('player')
 	self.health_max = UnitHealthMax('player')
 	self.mana.current = UnitPower('player', 0)
@@ -1171,6 +1190,7 @@ function Player:Update()
 	self.movement_speed = max_speed / 7 * 100
 	self:UpdateThreat()
 	self:UpdatePet()
+	AutoShot.speed = UnitRangedDamage('player')
 
 	trackAuras:Purge()
 	if Opt.auto_aoe then
@@ -1286,18 +1306,24 @@ end
 
 -- Start Ability Modifications
 
+function AutoShot:Reset()
+	self.speed = UnitRangedDamage('player')
+	self.next = Player.time + self.speed
+	if SteadyShot.known then
+		SteadyShot.used_after_shot = false
+	end
+	if Opt.shot_timer then
+		ghPanel.text.tl:SetTextColor(1, 1, 1, 1)
+	end
+end
+
 function AutoShot:CastStart()
 	self.next = Player.time + 0.5
 end
 
-function AutoShot:CastSuccess(...)
-	Ability.CastSuccess(self, ...)
-	self.last = Player.time
-	self.speed = UnitRangedDamage('player')
-	self.next = self.last + self.speed
-	if SteadyShot.known then
-		SteadyShot.used_after_shot = false
-	end
+function AutoShot:CastSuccess()
+	self.last_used = Player.time
+	self:Reset()
 end
 
 function AutoShot:CastFailed()
@@ -1306,7 +1332,23 @@ function AutoShot:CastFailed()
 end
 
 function AutoShot:Remains()
+	if AimedShot:Casting() then
+		return self.speed
+	end
+	if Player.cast_remains > (self.next - Player.time) then
+		return 0.5
+	end
 	return max(0, self.next - Player.time - Player.execute_remains)
+end
+
+function AimedShot:CastSuccess(...)
+	Ability.CastSuccess(self, ...)
+	AutoShot:Reset()
+end
+
+function FeignDeath:CastSuccess(...)
+	Ability.CastSuccess(self, ...)
+	AutoShot:CastFailed()
 end
 
 function RapidFire:CooldownDuration()
@@ -1446,8 +1488,8 @@ APL.main = function(self)
 	if RapidFire:Usable() and ((not Target.boss and Target.timeToDie > 15) or (Target.boss and Player:TimeInCombat() > 5 and (Bloodlust:Remains() > 10 or Target.healthPercentage < 20 or Target.timeToDie < 20 or Target.timeToDie > RapidFire:CooldownDuration() + 20))) then
 		UseCooldown(RapidFire)
 	end
-	local no_clip = not SteadyShot.known or AutoShot:Remains() > 1
-	local use_1_1 = AutoShot.speed < (SteadyShot:CastTime() + 1 + Opt.steady_pad)
+	local no_clip = not SteadyShot.known or AutoShot:Remains() > 0.5
+	local use_1_1 = AutoShot.speed < (SteadyShot:CastTime() + 0.5 + Opt.steady_pad)
 	if Target.timeToDie < 2 then
 		if MultiShot:Usable() then
 			return MultShot
@@ -1456,7 +1498,7 @@ APL.main = function(self)
 			return ArcaneShot
 		end
 	end
-	if MultiShot:Usable(AutoShot:Remains() - 1) and (Player.enemies >= 2 or use_1_1) and no_clip then
+	if MultiShot:Usable(AutoShot:Remains() - 0.5) and (Player.enemies >= 2 or use_1_1) and no_clip then
 		return MultiShot
 	end
 	if ExplosiveTrap:Usable() and Player.enemies >= 3 then
@@ -1653,7 +1695,7 @@ end
 
 function UI:UpdateDisplay()
 	timer.display = 0
-	local dim, dim_cd, text_center, text_tl
+	local dim, dim_cd, text_center, text_tl, text_tr
 	if Opt.dimmer then
 		dim = not ((not Player.main) or
 		           (Player.main.spellId and IsUsableSpell(Player.main.spellId)) or
@@ -1668,9 +1710,20 @@ function UI:UpdateDisplay()
 	end
 	if Opt.shot_timer then
 		local shot = AutoShot.next - (GetTime() - Player.time_diff)
+		if Player.cast_remains > 0 then
+			if AimedShot:Casting() then
+				shot = AutoShot.speed
+			elseif shot > 0 and Player.cast_remains > shot then
+				shot = Player.cast_remains + 0.5
+				ghPanel.text.tl:SetTextColor(1, 0, 0, 1)
+			end
+		end
 		if shot > 0 then
 			text_tl = format('%.1f', shot)
 		end
+	end
+	if Opt.shot_speed then
+		text_tr = format('%.1f', AutoShot.speed)
 	end
 	if Player.cd and Player.cd.queue_time then
 		if not ghCooldownPanel.swingQueueOverlayOn then
@@ -1685,6 +1738,7 @@ function UI:UpdateDisplay()
 	ghPanel.dimmer:SetShown(dim)
 	ghPanel.text.center:SetText(text_center)
 	ghPanel.text.tl:SetText(text_tl)
+	ghPanel.text.tr:SetText(text_tr)
 	ghCooldownPanel.dimmer:SetShown(dim_cd)
 	--ghPanel.text.bl:SetText(format('%.1fs', Target.timeToDie))
 end
@@ -1859,31 +1913,15 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 		return
 	end
 
-	if ability == AutoShot then
-		if event == 'SPELL_CAST_START' then
-			ability:CastStart(dstGUID)
-		elseif event == 'SPELL_CAST_SUCCESS' then
-			ability:CastSuccess(dstGUID)
-		elseif event == 'SPELL_CAST_FAILED' then
-			ability:CastFailed(dstGUID)
-		end
-		return
-	end
-
 	UI:UpdateCombatWithin(0.05)
 	if event == 'SPELL_CAST_SUCCESS' then
 		ability:CastSuccess(dstGUID)
-		if Opt.previous and ghPanel:IsVisible() then
-			ghPreviousPanel.ability = ability
-			ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
-			ghPreviousPanel.icon:SetTexture(ability.icon)
-			ghPreviousPanel:Show()
-		end
-		if ability.aura_targets and ability.requires_react then
-			ability:RemoveAura(ability.auraTarget == 'player' and srcGUID or dstGUID)
-		end
+		return
+	elseif event == 'SPELL_CAST_START' then
+		ability:CastStart(dstGUID)
 		return
 	elseif event == 'SPELL_CAST_FAILED' then
+		ability:CastFailed(dstGUID)
 		if ability.requires_pet and missType == 'No path available' then
 			Player.pet.stuck = true
 		end
@@ -2094,6 +2132,9 @@ function events:UNIT_SPELLCAST_SUCCEEDED(srcName, castGUID, spellId)
 	if ability.mana_cost > 0 then
 		Player.mana.fsr_break = GetTime()
 	end
+	if ability == FeignDeath then
+		ability:CastSuccess() -- Feign Death doesn't have a CLEU trigger, so this is a workaround
+	end
 end
 
 function events:UNIT_POWER_FREQUENT(srcName, powerType)
@@ -2101,6 +2142,12 @@ function events:UNIT_POWER_FREQUENT(srcName, powerType)
 		return
 	elseif powerType == 'MANA' then
 		Player:ManaTick()
+	end
+end
+
+function events:MIRROR_TIMER_STOP(timer)
+	if timer == 'FEIGNDEATH' then
+		AutoShot:Reset()
 	end
 end
 
@@ -2387,6 +2434,12 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		end
 		return Status('Show time remaining until next auto-shot (top-left)', Opt.shot_timer)
 	end
+	if startsWith(msg[1], 'sp') then
+		if msg[2] then
+			Opt.shot_speed = msg[2] == 'on'
+		end
+		return Status('Show auto-shot speed (top-right)', Opt.shot_speed)
+	end
 	if startsWith(msg[1], 'st') then
 		if msg[2] then
 			Opt.steady_pad = tonumber(msg[2]) or 0.2
@@ -2427,7 +2480,8 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		'ttd |cFFFFD000[seconds]|r  - minimum enemy lifetime to use cooldowns on (default is 8 seconds, ignored on bosses)',
 		'pot |cFF00C000on|r/|cFFC00000off|r - show flasks and battle potions in cooldown UI',
 		'trinket |cFF00C000on|r/|cFFC00000off|r - show on-use trinkets in cooldown UI',
-		'shot |cFF00C000on|r/|cFFC00000off|r - show time remaining until next auto-shot',
+		'shot |cFF00C000on|r/|cFFC00000off|r - show time remaining until next auto-shot (top-left)',
+		'speed |cFF00C000on|r/|cFFC00000off|r - show auto-shot speed (top-right)',
 		'steady |cFFFFD000[seconds]|r  - shorten Steady Shot window by X seconds (latency pad, default is 0.2 seconds)',
 		'mend |cFFFFD000[percent]|r  - health percentage to recommend Mend Pet at (default is 65%, 0 to disable)',
 		'|cFFFFD000reset|r - reset the location of the ' .. ADDON .. ' UI to default',
