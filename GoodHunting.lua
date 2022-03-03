@@ -849,6 +849,13 @@ FeedPet.buff = Ability:Add({1539}, true, true)
 FeedPet.buff.buff_duration = 20
 FeedPet.buff.tick_interval = 2
 FeedPet.buff.auraTarget = 'pet'
+local KillCommand = Ability:Add({34026}, true, true)
+KillCommand.mana_costs = {75}
+KillCommand.buff_duration = 5 -- use 5 second imaginary buff triggered by crits
+KillCommand.cooldown_duration = 5
+KillCommand.requires_react = true
+KillCommand.requires_pet = true
+KillCommand:TrackAuras()
 local MendPet = Ability:Add({136, 3111, 3661, 3662, 13542, 13543, 13544, 27046}, true, true)
 MendPet.mana_costs = {40, 70, 100, 130, 165, 200, 250, 300}
 MendPet.buff_duration = 15
@@ -1470,23 +1477,24 @@ APL.main = function(self)
 			return AimedShot
 		end
 	else
+		if Player.threat.status >= 3 and FeignDeath:Usable() then
+			UseExtra(FeignDeath)
+		end
 		if AspectOfTheHawk:Usable() and AspectOfTheHawk:Down() and (not AspectOfTheViper.known or Player:ManaPct() >= Opt.viper_high or AspectOfTheViper:Down()) then
 			UseExtra(AspectOfTheHawk)
 		end
 		if AspectOfTheViper:Usable() and AspectOfTheViper:Down() and Player:ManaPct() < Opt.viper_low and Target.timeToDie > 15 then
 			UseExtra(AspectOfTheViper)
 		end
-		if Player.threat.status >= 3 then
-			if FeignDeath:Usable() then
-				UseCooldown(FeignDeath)
+		if KillCommand:Usable() then
+			UseCooldown(KillCommand)
+		end
+		if Player.threat.status >= 3 and Player:UnderMeleeAttack() then
+			if RaptorStrike:Usable() then
+				UseCooldown(RaptorStrike)
 			end
-			if Player:UnderMeleeAttack() then
-				if RaptorStrike:Usable() then
-					UseCooldown(RaptorStrike)
-				end
-				if MongooseBite:Usable() then
-					return MongooseBite
-				end
+			if MongooseBite:Usable() then
+				return MongooseBite
 			end
 		end
 		if ExplosiveTrap:Usable() and Player:UnderMeleeAttack() and Player.enemies > 1 then
@@ -1874,6 +1882,11 @@ CombatEvent.SWING_DAMAGE = function(event, srcGUID, dstGUID, amount, overkill, s
 		Player.pet.stuck = false
 		return
 	end
+	if srcGUID == Player.guid and critical then
+		if KillCommand.known then
+			KillCommand:ApplyAura(srcGUID)
+		end
+	end
 	if not (dstGUID == Player.guid or dstGUID == Player.pet.guid) then
 		return
 	end
@@ -1921,6 +1934,12 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 
 	if srcGUID ~= Player.guid then
 		return
+	end
+
+	if event == 'SPELL_DAMAGE' and critical then
+		if KillCommand.known then
+			KillCommand:ApplyAura(srcGUID)
+		end
 	end
 
 	local ability = spellId and abilities.bySpellId[spellId]
