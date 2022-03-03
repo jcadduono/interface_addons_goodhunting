@@ -898,6 +898,7 @@ SerpentSting:TrackAuras()
 local SteadyShot = Ability:Add({34120}, false, true)
 SteadyShot.mana_costs = {110}
 SteadyShot.used_after_shot = false
+SteadyShot.triggers_combat = true
 SteadyShot:SetVelocity(35)
 ------ Talents
 local RapidKilling = Ability:Add({34948, 34949}, true, true)
@@ -1345,6 +1346,11 @@ function AutoShot:Remains()
 	return max(0, self.next - Player.time - Player.execute_remains)
 end
 
+function AimedShot:CastStart(...)
+	Ability.CastStart(self, ...)
+	AutoShot:Reset()
+end
+
 function AimedShot:CastSuccess(...)
 	Ability.CastSuccess(self, ...)
 	AutoShot:Reset()
@@ -1427,11 +1433,6 @@ local function UseExtra(ability, overwrite)
 	end
 end
 
-local function WaitForDrop(ability)
-	Player.wait_seconds = ability:Remains()
-	return ability
-end
-
 -- Begin Action Priority Lists
 
 local APL = {}
@@ -1506,7 +1507,7 @@ APL.main = function(self)
 	if ArcaneShot:Usable() and Player.enemies == 1 and Target.timeToDie < 2 then
 		return ArcaneShot
 	end
-	if MultiShot:Usable(AutoShot:Remains() - 0.5) and (use_1_1 or Player.enemies >= 2 or Target.timeToDie < 2) and no_clip then
+	if MultiShot:Usable() and (use_1_1 or Target.timeToDie < 2) and no_clip then
 		return MultiShot
 	end
 	if ExplosiveTrap:Usable() and Player.enemies >= 3 then
@@ -1515,13 +1516,13 @@ APL.main = function(self)
 	if SteadyShot:Usable() and SteadyShot:FirstAfterShot() and no_clip then
 		return SteadyShot
 	end
-	if MultiShot:Usable() and (not SteadyShot.known or Player:ManaPct() > (10 + (Target.healthPercentage / 2))) and no_clip then
+	if MultiShot:Usable() and (not SteadyShot.known or Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 2))) and no_clip then
 		return MultiShot
 	end
 	if SteadyShot:Usable() and AutoShot:Remains() > (SteadyShot:CastTime() + Opt.steady_pad) then
 		return SteadyShot
 	end
-	if ArcaneShot:Usable() and (Player.moving or not SteadyShot.known or (Player:ManaPct() > (10 + (Target.healthPercentage / 1.5)) and no_clip and AspectOfTheViper:Down())) then
+	if ArcaneShot:Usable() and (Player.moving or not SteadyShot.known or (Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 1.5)) and no_clip and AspectOfTheViper:Down())) then
 		return ArcaneShot
 	end
 	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) and (Player.moving or not SteadyShot.known or (Player:ManaPct() > 90 and no_clip)) then
@@ -1701,29 +1702,22 @@ function UI:Disappear()
 	UI:UpdateGlows()
 end
 
-function UI:UpdateDisplay()
-	timer.display = 0
-	local dim, dim_cd, text_center, text_tl, text_tr
-	if Opt.dimmer then
-		dim = not ((not Player.main) or
-		           (Player.main.spellId and IsUsableSpell(Player.main.spellId)) or
-		           (Player.main.itemId and IsUsableItem(Player.main.itemId)))
-		dim_cd = not ((not Player.cd) or
-		           (Player.cd.spellId and IsUsableSpell(Player.cd.spellId)) or
-		           (Player.cd.itemId and IsUsableItem(Player.cd.itemId)))
-	end
-	if Player.wait_seconds then
-		text_center = format('WAIT\n%.1fs', Player.wait_seconds)
-		dim = Opt.dimmer
-	end
+function UI:UpdateShotTimers()
+	local text_tl, text_tr
+
 	if Opt.shot_timer then
-		local shot = AutoShot.next - (GetTime() - Player.time_diff)
-		if Player.cast_remains > 0 then
-			if AimedShot:Casting() then
-				shot = AutoShot.speed
-			elseif shot > 0 and Player.cast_remains > shot then
-				shot = Player.cast_remains + 0.5
-				ghPanel.text.tl:SetTextColor(1, 0, 0, 1)
+		local now = GetTime()
+		local shot = AutoShot.next - (now - Player.time_diff)
+		local _, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
+		if spellId then
+			remains = (remains / 1000) - now
+			if abilities.bySpellId[spellId] == AimedShot then
+				shot = remains + AutoShot.speed
+			elseif remains > shot then
+				if shot > 0 then
+					ghPanel.text.tl:SetTextColor(1, 0, 0, 1)
+				end
+				shot = remains + 0.5
 			end
 		end
 		if shot > 0 then
@@ -1732,6 +1726,23 @@ function UI:UpdateDisplay()
 	end
 	if Opt.shot_speed then
 		text_tr = format('%.1f', AutoShot.speed)
+	end
+
+	ghPanel.text.tl:SetText(text_tl)
+	ghPanel.text.tr:SetText(text_tr)
+end
+
+function UI:UpdateDisplay()
+	timer.display = 0
+	local dim, dim_cd, text_center
+
+	if Opt.dimmer then
+		dim = not ((not Player.main) or
+		           (Player.main.spellId and IsUsableSpell(Player.main.spellId)) or
+		           (Player.main.itemId and IsUsableItem(Player.main.itemId)))
+		dim_cd = not ((not Player.cd) or
+		           (Player.cd.spellId and IsUsableSpell(Player.cd.spellId)) or
+		           (Player.cd.itemId and IsUsableItem(Player.cd.itemId)))
 	end
 	if Player.cd and Player.cd.queue_time then
 		if not ghCooldownPanel.swingQueueOverlayOn then
@@ -1745,10 +1756,10 @@ function UI:UpdateDisplay()
 
 	ghPanel.dimmer:SetShown(dim)
 	ghPanel.text.center:SetText(text_center)
-	ghPanel.text.tl:SetText(text_tl)
-	ghPanel.text.tr:SetText(text_tr)
 	ghCooldownPanel.dimmer:SetShown(dim_cd)
 	--ghPanel.text.bl:SetText(format('%.1fs', Target.timeToDie))
+
+	self:UpdateShotTimers()
 end
 
 function UI:UpdateCombat()
@@ -1811,9 +1822,6 @@ function events:ADDON_LOADED(name)
 		if not Opt.frequency then
 			print('It looks like this is your first time running ' .. ADDON .. ', why don\'t you take some time to familiarize yourself with the commands?')
 			print('Type |cFFFFD000' .. SLASH_GoodHunting1 .. '|r for a list of commands.')
-		end
-		if UnitLevel('player') < 10 then
-			print('[|cFFFFD000Warning|r] ' .. ADDON .. ' is not designed for players under level 10, and almost certainly will not operate properly!')
 		end
 		InitOpts()
 		UI:UpdateDraggable()
