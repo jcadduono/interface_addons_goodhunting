@@ -488,13 +488,23 @@ function Ability:Usable(seconds)
 	if self.requires_charge and self:Charges() == 0 then
 		return false
 	end
-	if self.requires_react and not IsUsableSpell(self.spellId) then
+	if self.requires_react and self:React() == 0 then
 		return false
 	end
 	if self.requires_pet and not Player.pet.active then
 		return false
 	end
 	return self:Ready(seconds)
+end
+
+function Ability:React()
+	if self.aura_targets then
+		local guid = self.auraTarget == 'player' and Player.guid or Target.guid
+		if self.aura_targets[guid] then
+			return max(0, self.aura_targets[guid].expires - Player.time - Player.execute_remains)
+		end
+	end
+	return 0
 end
 
 function Ability:Remains(mine)
@@ -845,9 +855,9 @@ local KillCommand = Ability:Add({34026}, true, true)
 KillCommand.mana_costs = {75}
 KillCommand.buff_duration = 5 -- use 5 second imaginary buff triggered by crits
 KillCommand.cooldown_duration = 5
-KillCommand.triggers_gcd = false
 KillCommand.requires_react = true
 KillCommand.requires_pet = true
+KillCommand:TrackAuras()
 local MendPet = Ability:Add({136, 3111, 3661, 3662, 13542, 13543, 13544, 27046}, true, true)
 MendPet.mana_costs = {40, 70, 100, 130, 165, 200, 250, 300}
 MendPet.buff_duration = 15
@@ -931,6 +941,7 @@ MongooseBite.mana_costs = {30, 40, 50, 65, 80}
 MongooseBite.buff_duration = 5 -- use 5 second imaginary buff triggered by dodge
 MongooseBite.cooldown_duration = 5
 MongooseBite.requires_react = true
+MongooseBite:TrackAuras()
 ------ Talents
 
 ------ Procs
@@ -1884,6 +1895,11 @@ CombatEvent.SWING_DAMAGE = function(event, srcGUID, dstGUID, amount, overkill, s
 		Player.pet.stuck = false
 		return
 	end
+	if srcGUID == Player.guid and critical then
+		if KillCommand.known then
+			KillCommand:ApplyAura(srcGUID)
+		end
+	end
 	if not (dstGUID == Player.guid or dstGUID == Player.pet.guid) then
 		return
 	end
@@ -1905,6 +1921,9 @@ CombatEvent.SWING_MISSED = function(event, srcGUID, dstGUID, missType, offHand, 
 	end
 	if dstGUID == Player.guid then
 		Player.swing.last_taken = Player.time
+		if MongooseBite.known and missType == 'DODGE' then
+			MongooseBite:ApplyAura(dstGUID)
+		end
 	end
 	if Opt.auto_aoe then
 		autoAoe:Add(srcGUID, true)
@@ -1912,6 +1931,12 @@ CombatEvent.SWING_MISSED = function(event, srcGUID, dstGUID, missType, offHand, 
 end
 
 CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellSchool, missType, _, _, resisted, blocked, absorbed, critical)
+	if event == 'SPELL_MISSED' and dstGUID == Player.guid then
+		if MongooseBite.known and missType == 'DODGE' then
+			MongooseBite:ApplyAura(dstGUID)
+		end
+	end
+
 	if srcGUID == Player.pet.guid then
 		if Player.pet.stuck and (event == 'SPELL_CAST_SUCCESS' or event == 'SPELL_DAMAGE') then
 			Player.pet.stuck = false
@@ -1922,6 +1947,12 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 
 	if srcGUID ~= Player.guid then
 		return
+	end
+
+	if event == 'SPELL_DAMAGE' and critical then
+		if KillCommand.known then
+			KillCommand:ApplyAura(srcGUID)
+		end
 	end
 
 	local ability = spellId and abilities.bySpellId[spellId]
