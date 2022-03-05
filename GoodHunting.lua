@@ -1523,7 +1523,7 @@ APL.main = function(self)
 	if ExplosiveTrap:Usable() and Player.enemies >= 3 then
 		UseCooldown(ExplosiveTrap)
 	end
-	if SteadyShot:Usable() and ((Opt.steady_macro and AutoShot:Remains() == 0) or (SteadyShot:FirstAfterShot() and SteadyShot:CastTime() < (AutoShot:Remains() + 0.5))) then
+	if SteadyShot:Usable() and ((Opt.steady_macro and not Player.moving and AutoShot:Remains() == 0) or (SteadyShot:FirstAfterShot() and SteadyShot:CastTime() < (AutoShot:Remains() + 0.5))) then
 		return SteadyShot
 	end
 	if MultiShot:Usable() and use_multi and no_clip then
