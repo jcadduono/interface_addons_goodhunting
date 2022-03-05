@@ -475,7 +475,7 @@ function Ability:Match(spell)
 end
 
 function Ability:Ready(seconds)
-	return self:Cooldown() <= (seconds or 0)
+	return self:Cooldown() <= (seconds or 0) and (not self.requires_react or self:React() > (seconds or 0))
 end
 
 function Ability:Usable(seconds)
@@ -486,9 +486,6 @@ function Ability:Usable(seconds)
 		return false
 	end
 	if self.requires_charge and self:Charges() == 0 then
-		return false
-	end
-	if self.requires_react and self:React() == 0 then
 		return false
 	end
 	if self.requires_pet and not Player.pet.active then
@@ -855,6 +852,7 @@ local KillCommand = Ability:Add({34026}, true, true)
 KillCommand.mana_costs = {75}
 KillCommand.buff_duration = 5 -- use 5 second imaginary buff triggered by crits
 KillCommand.cooldown_duration = 5
+KillCommand.triggers_gcd = false
 KillCommand.requires_react = true
 KillCommand.requires_pet = true
 KillCommand:TrackAuras()
