@@ -98,7 +98,7 @@ local function InitOpts()
 		trinket = true,
 		shot_timer = true,
 		shot_speed = true,
-		steady_pad = 0.1,
+		steady_macro = true,
 		mend_threshold = 65,
 		viper_low = 15,
 		viper_high = 50,
@@ -840,6 +840,8 @@ local AspectOfTheCheetah = Ability:Add({5118}, true, true)
 AspectOfTheCheetah.mana_cost = 40
 local AspectOfTheHawk = Ability:Add({13165, 14318, 14319, 14320, 14321, 14322, 25296, 27044}, true, true)
 AspectOfTheHawk.mana_costs = {20, 35, 50, 70, 90, 110, 120, 140}
+local AspectOfThePack = Ability:Add({13159}, true, true)
+AspectOfThePack.mana_cost = 100
 local AspectOfTheViper = Ability:Add({34074}, true, true)
 AspectOfTheViper.mana_cost = 40
 local CallPet = Ability:Add({883}, false, true)
@@ -904,7 +906,6 @@ SerpentSting:SetVelocity(35)
 SerpentSting:TrackAuras()
 local SteadyShot = Ability:Add({34120}, false, true)
 SteadyShot.mana_costs = {110}
-SteadyShot.used_after_shot = false
 SteadyShot.triggers_combat = true
 SteadyShot:SetVelocity(35)
 ------ Talents
@@ -1319,36 +1320,42 @@ end
 -- Start Ability Modifications
 
 function AutoShot:Reset()
+	self.casting = false
 	self.speed = UnitRangedDamage('player')
 	self.next = Player.time + self.speed
-	if SteadyShot.known then
-		SteadyShot.used_after_shot = false
-	end
 	if Opt.shot_timer then
 		ghPanel.text.tl:SetTextColor(1, 1, 1, 1)
 	end
 end
 
 function AutoShot:CastStart()
-	self.next = Player.time + 0.5
+	self.casting = true
+	self.speed = UnitRangedDamage('player')
+	self.next = Player.time + self.speed
+	if Opt.shot_timer then
+		ghPanel.text.tl:SetTextColor(1, 0.75, 0, 1)
+	end
 end
 
 function AutoShot:CastSuccess()
+	self.casting = false
 	self.last_used = Player.time
-	self:Reset()
+	if Opt.shot_timer then
+		ghPanel.text.tl:SetTextColor(1, 1, 1, 1)
+	end
 end
 
 function AutoShot:CastFailed()
-	self.speed = UnitRangedDamage('player')
-	self.next = 0
+	self.casting = false
+	self.next = Player.time
+	if Opt.shot_timer then
+		ghPanel.text.tl:SetTextColor(1, 1, 1, 1)
+	end
 end
 
 function AutoShot:Remains()
 	if AimedShot:Casting() then
 		return self.speed
-	end
-	if Player.cast_remains > (self.next - Player.time) then
-		return 0.5
 	end
 	return max(0, self.next - Player.time - Player.execute_remains)
 end
@@ -1387,6 +1394,9 @@ function CallPet:Usable()
 	if Player.pet.active then
 		return false
 	end
+	if Player.pet.guid and UnitIsDead('pet') then
+		return false
+	end
 	return Ability.Usable(self)
 end
 
@@ -1418,12 +1428,7 @@ function RevivePet:Usable()
 end
 
 function SteadyShot:FirstAfterShot()
-	return not (self.used_after_shot or self:Casting())
-end
-
-function SteadyShot:CastSuccess(...)
-	Ability.CastSuccess(self, ...)
-	self.used_after_shot = true
+	return (AutoShot.casting or (Player.time - AutoShot.last_used) < 1 or AimedShot:Casting()) and not self:Casting()
 end
 
 -- End Ability Modifications
@@ -1466,8 +1471,13 @@ APL.main = function(self)
 			if AspectOfTheViper:Usable() and AspectOfTheViper:Down() and Player:ManaPct() < Opt.viper_high then
 				return AspectOfTheViper
 			end
-			if AspectOfTheCheetah:Usable() and Player.moving and AspectOfTheCheetah:Down() and not (IsMounted() or IsSwimming() or UnitOnTaxi('player')) then
-				return AspectOfTheCheetah
+			if Player.moving and not (IsMounted() or IsSwimming() or UnitOnTaxi('player')) then
+				if AspectOfThePack:Usable() and AspectOfTheCheetah:Down() and AspectOfThePack:Down() and Player.group_size > 1 then
+					return AspectOfThePack
+				end
+				if AspectOfTheCheetah:Usable() and AspectOfTheCheetah:Down() and AspectOfThePack:Down() then
+					return AspectOfTheCheetah
+				end
 			end
 		end
 		if HuntersMark:Usable() and HuntersMark:Down() then
@@ -1510,30 +1520,33 @@ APL.main = function(self)
 	if RapidFire:Usable() and ((not Target.boss and Target.timeToDie > 15) or (Target.boss and Player:TimeInCombat() > 5 and (Bloodlust:Remains() > 10 or Target.healthPercentage < 20 or Target.timeToDie < 20 or Target.timeToDie > RapidFire:CooldownDuration() + 20))) then
 		UseCooldown(RapidFire)
 	end
-	local no_clip = not SteadyShot.known or AutoShot:Remains() > 0.5
-	local use_1_1 = AutoShot.speed < (SteadyShot:CastTime() + 0.5 + Opt.steady_pad)
+	local no_clip = not SteadyShot.known or (AutoShot:Remains() + AutoShot.speed - Player.gcd) > SteadyShot:CastTime()
+	local use_multi = Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 2))
+	local use_as = not SteadyShot.known or (Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 1.5)) and AspectOfTheViper:Down())
+	local use_ss = not SteadyShot.known or (Player:ManaPct() > 90 and AutoShot:Remains() > Player.gcd)
 	if ArcaneShot:Usable() and Player.enemies == 1 and Target.timeToDie < 2 then
 		return ArcaneShot
 	end
-	if MultiShot:Usable() and (use_1_1 or Target.timeToDie < 2) and no_clip then
+	--print('no_clip', no_clip, AutoShot:Remains() + AutoShot.speed - Player.gcd, SteadyShot:CastTime(), 'use_multi', use_multi, AutoShot:Remains(), SteadyShot:CastTime() + 0.5)
+	if MultiShot:Usable() and use_multi and no_clip and (AutoShot:Remains() < (SteadyShot:CastTime() + 0.5) or Target.timeToDie < 2) then
 		return MultiShot
 	end
 	if ExplosiveTrap:Usable() and Player.enemies >= 3 then
 		UseCooldown(ExplosiveTrap)
 	end
-	if SteadyShot:Usable() and SteadyShot:FirstAfterShot() and no_clip then
+	if SteadyShot:Usable() and ((Opt.steady_macro and AutoShot:Remains() == 0) or (SteadyShot:FirstAfterShot() and SteadyShot:CastTime() < (AutoShot:Remains() + 0.5))) then
 		return SteadyShot
 	end
-	if MultiShot:Usable() and (not SteadyShot.known or Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 2))) and no_clip then
+	if MultiShot:Usable() and use_multi and no_clip then
 		return MultiShot
 	end
-	if SteadyShot:Usable() and AutoShot:Remains() > (SteadyShot:CastTime() + Opt.steady_pad) then
+	if SteadyShot:Usable() and SteadyShot:CastTime() < AutoShot:Remains() then
 		return SteadyShot
 	end
-	if ArcaneShot:Usable() and (Player.moving or not SteadyShot.known or (Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 1.5)) and no_clip and AspectOfTheViper:Down())) then
+	if ArcaneShot:Usable() and (Player.moving or (use_as and no_clip)) then
 		return ArcaneShot
 	end
-	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) and (Player.moving or not SteadyShot.known or (Player:ManaPct() > 90 and no_clip)) then
+	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) and (Player.moving or use_ss) then
 		return SerpentSting
 	end
 end
@@ -1725,7 +1738,7 @@ function UI:UpdateShotTimers()
 				if shot > 0 then
 					ghPanel.text.tl:SetTextColor(1, 0, 0, 1)
 				end
-				shot = remains + 0.5
+				shot = remains
 			end
 		end
 		if shot > 0 then
@@ -2467,19 +2480,19 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		if msg[2] then
 			Opt.shot_timer = msg[2] == 'on'
 		end
-		return Status('Show time remaining until next auto-shot (top-left)', Opt.shot_timer)
+		return Status('Show time remaining until next Auto Shot (top-left)', Opt.shot_timer)
 	end
 	if startsWith(msg[1], 'sp') then
 		if msg[2] then
 			Opt.shot_speed = msg[2] == 'on'
 		end
-		return Status('Show auto-shot speed (top-right)', Opt.shot_speed)
+		return Status('Show Auto Shot speed (top-right)', Opt.shot_speed)
 	end
 	if startsWith(msg[1], 'st') then
 		if msg[2] then
-			Opt.steady_pad = tonumber(msg[2]) or 0.2
+			Opt.steady_macro = msg[2] == 'on'
 		end
-		return Status('Shorten Steady Shot window (latency pad) by', Opt.steady_pad, 'seconds')
+		return Status('Using a Steady Shot macro that starts Auto Shot', Opt.steady_macro)
 	end
 	if startsWith(msg[1], 'me') then
 		if msg[2] then
@@ -2531,9 +2544,9 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		'ttd |cFFFFD000[seconds]|r  - minimum enemy lifetime to use cooldowns on (default is 8 seconds, ignored on bosses)',
 		'pot |cFF00C000on|r/|cFFC00000off|r - show flasks and battle potions in cooldown UI',
 		'trinket |cFF00C000on|r/|cFFC00000off|r - show on-use trinkets in cooldown UI',
-		'shot |cFF00C000on|r/|cFFC00000off|r - show time remaining until next auto-shot (top-left)',
-		'speed |cFF00C000on|r/|cFFC00000off|r - show auto-shot speed (top-right)',
-		'steady |cFFFFD000[seconds]|r  - shorten Steady Shot window by X seconds (latency pad, default is 0.2 seconds)',
+		'shot |cFF00C000on|r/|cFFC00000off|r - show time remaining until next Auto Shot (top-left)',
+		'speed |cFF00C000on|r/|cFFC00000off|r - show Auto Shot speed (top-right)',
+		'steady |cFF00C000on|r/|cFFC00000off|r  - enable this if using a Steady Shot macro that starts Auto Shot',
 		'mend |cFFFFD000[percent]|r  - health percentage to recommend Mend Pet at (default is 65%, 0 to disable)',
 		'viper |cFFFFD000[low] [high]|r  - mana percentage to recommend Aspect of the Viper at (default is 15% to 50%)',
 		'|cFFFFD000reset|r - reset the location of the ' .. ADDON .. ' UI to default',
