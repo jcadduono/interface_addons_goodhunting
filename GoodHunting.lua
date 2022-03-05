@@ -1863,6 +1863,7 @@ CombatEvent.TRIGGER = function(timeStamp, event, _, srcGUID, _, _, _, dstGUID, _
 	then
 		e = 'UNIT_DIED'
 	elseif (
+	   e == 'RANGE_DAMAGE' or
 	   e == 'SPELL_CAST_START' or
 	   e == 'SPELL_CAST_SUCCESS' or
 	   e == 'SPELL_CAST_FAILED' or
@@ -1947,7 +1948,7 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 		return
 	end
 
-	if event == 'SPELL_DAMAGE' and critical then
+	if (event == 'RANGE_DAMAGE' or event == 'SPELL_DAMAGE') and critical then
 		if KillCommand.known then
 			KillCommand:ApplyAura(srcGUID)
 		end
@@ -1993,7 +1994,7 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 			ability:RecordTargetHit(dstGUID)
 		end
 	end
-	if event == 'SPELL_ABSORBED' or event == 'SPELL_MISSED' or event == 'SPELL_DAMAGE' or event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
+	if event == 'RANGE_DAMAGE' or event == 'SPELL_DAMAGE' or event == 'SPELL_ABSORBED' or event == 'SPELL_MISSED' or event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
 		ability:CastLanded(dstGUID, event)
 		if Opt.previous and Opt.miss_effect and event == 'SPELL_MISSED' and ghPanel:IsVisible() and ability == ghPreviousPanel.ability then
 			ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'misseffect.blp')
