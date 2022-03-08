@@ -1644,7 +1644,7 @@ function UI:UpdateGlows()
 		icon = glow.button.icon:GetTexture()
 		if icon and glow.button.icon:IsVisible() and (
 			(Opt.glow.main and Player.main and icon == Player.main.icon) or
-			(Opt.glow.cooldown and Player.cd and icon == Player.cd.icon) or
+			(Opt.glow.cooldown and Player.cd and icon == Player.cd.icon and not Player.cd.queued) or
 			(Opt.glow.interrupt and Player.interrupt and icon == Player.interrupt.icon) or
 			(Opt.glow.extra and Player.extra and icon == Player.extra.icon)
 			) then
@@ -1765,7 +1765,7 @@ function UI:UpdateDisplay()
 		           (Player.cd.spellId and IsUsableSpell(Player.cd.spellId)) or
 		           (Player.cd.itemId and IsUsableItem(Player.cd.itemId)))
 	end
-	if Player.cd and Player.cd.queue_time then
+	if Player.cd and Player.cd.queued then
 		if not ghCooldownPanel.swingQueueOverlayOn then
 			ghCooldownPanel.swingQueueOverlayOn = true
 			ghCooldownPanel.border:SetTexture(ADDON_PATH .. 'swingqueue.blp')
@@ -2163,7 +2163,7 @@ function events:UNIT_SPELLCAST_SENT(srcName, dstName, castGUID, spellId)
 		return
 	end
 	if ability.swing_queue then
-		ability.queue_time = GetTime()
+		ability.queued = true
 	end
 end
 
@@ -2176,7 +2176,7 @@ function events:UNIT_SPELLCAST_FAILED(srcName, castGUID, spellId)
 		return
 	end
 	if ability.swing_queue then
-		ability.queue_time = nil
+		ability.queued = false
 	end
 end
 events.UNIT_SPELLCAST_FAILED_QUIET = events.UNIT_SPELLCAST_FAILED
@@ -2193,7 +2193,7 @@ function events:UNIT_SPELLCAST_SUCCEEDED(srcName, castGUID, spellId)
 		ability.next_castGUID = castGUID
 	end
 	if ability.swing_queue then
-		ability.queue_time = nil
+		ability.queued = false
 	end
 	if ability.mana_cost > 0 then
 		Player.mana.fsr_break = GetTime()
