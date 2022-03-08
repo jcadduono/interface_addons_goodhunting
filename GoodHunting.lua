@@ -260,6 +260,11 @@ ghCooldownPanel.dimmer:SetColorTexture(0, 0, 0, 0.6)
 ghCooldownPanel.dimmer:Hide()
 ghCooldownPanel.swipe = CreateFrame('Cooldown', nil, ghCooldownPanel, 'CooldownFrameTemplate')
 ghCooldownPanel.swipe:SetAllPoints(ghCooldownPanel)
+ghCooldownPanel.text = ghCooldownPanel:CreateFontString(nil, 'OVERLAY')
+ghCooldownPanel.text:SetFont('Fonts\\FRIZQT__.TTF', 12, 'OUTLINE')
+ghCooldownPanel.text:SetAllPoints(ghCooldownPanel)
+ghCooldownPanel.text:SetJustifyH('CENTER')
+ghCooldownPanel.text:SetJustifyV('CENTER')
 local ghInterruptPanel = CreateFrame('Frame', 'ghInterruptPanel', UIParent)
 ghInterruptPanel:SetFrameStrata('BACKGROUND')
 ghInterruptPanel:SetSize(64, 64)
@@ -1755,7 +1760,7 @@ end
 
 function UI:UpdateDisplay()
 	timer.display = 0
-	local dim, dim_cd, text_center
+	local dim, dim_cd, text_center, text_cd
 
 	if Opt.dimmer then
 		dim = not ((not Player.main) or
@@ -1774,9 +1779,22 @@ function UI:UpdateDisplay()
 		ghCooldownPanel.swingQueueOverlayOn = false
 		ghCooldownPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 	end
+	if Player.main and Player.main.requires_react then
+		local react = Player.main:React()
+		if react > 0 then
+			text_center = format('%.1f', react)
+		end
+	end
+	if Player.cd and Player.cd.requires_react then
+		local react = Player.cd:React()
+		if react > 0 then
+			text_cd = format('%.1f', react)
+		end
+	end
 
 	ghPanel.dimmer:SetShown(dim)
 	ghPanel.text.center:SetText(text_center)
+	ghCooldownPanel.text:SetText(text_cd)
 	ghCooldownPanel.dimmer:SetShown(dim_cd)
 	--ghPanel.text.bl:SetText(format('%.1fs', Target.timeToDie))
 
