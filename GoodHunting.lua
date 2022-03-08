@@ -1389,7 +1389,7 @@ function SerpentSting:Usable()
 end
 
 function CallPet:Usable()
-	if Player.pet.active then
+	if Player.pet.active or RevivePet:Casting() then
 		return false
 	end
 	if Player.pet.guid and UnitIsDead('pet') then
@@ -1520,31 +1520,33 @@ APL.main = function(self)
 	end
 	local no_clip = not SteadyShot.known or (AutoShot:Remains() + AutoShot.speed - Player.gcd) > SteadyShot:CastTime()
 	local use_multi = Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 2))
-	local use_as = not SteadyShot.known or (Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 1.5)) and AspectOfTheViper:Down())
-	local use_ss = not SteadyShot.known or (Player:ManaPct() > 90 and AutoShot:Remains() > Player.gcd)
+	local use_arcane = not SteadyShot.known or (Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 1.5)) and AspectOfTheViper:Down())
+	local use_sting = not SteadyShot.known or (Player:ManaPct() > 90 and AutoShot:Remains() > Player.gcd)
 	if ArcaneShot:Usable() and Player.enemies == 1 and Target.timeToDie < 2 then
 		return ArcaneShot
 	end
-	--print('no_clip', no_clip, AutoShot:Remains() + AutoShot.speed - Player.gcd, SteadyShot:CastTime(), 'use_multi', use_multi, AutoShot:Remains(), SteadyShot:CastTime() + 0.5)
-	if MultiShot:Usable() and use_multi and no_clip and (AutoShot:Remains() < (SteadyShot:CastTime() + 0.5) or Target.timeToDie < 2) then
+	if MultiShot:Usable() and use_multi and (Target.timeToDie < 2 or between(AutoShot:Remains(), 0.5, SteadyShot:CastTime() + 0.5)) then
 		return MultiShot
 	end
 	if ExplosiveTrap:Usable() and Player.enemies >= 3 then
 		UseCooldown(ExplosiveTrap)
 	end
-	if SteadyShot:Usable() and ((Opt.steady_macro and not Player.moving and AutoShot:Remains() == 0) or (SteadyShot:FirstAfterShot() and SteadyShot:CastTime() < (AutoShot:Remains() + 0.5))) then
+	if SteadyShot:Usable() and ((Opt.steady_macro and not Player.moving and AutoShot:Remains() == 0) or (SteadyShot:FirstAfterShot() and SteadyShot:CastTime() < AutoShot:Remains())) then
 		return SteadyShot
 	end
-	if MultiShot:Usable() and use_multi and no_clip then
-		return MultiShot
-	end
-	if SteadyShot:Usable() and SteadyShot:CastTime() < AutoShot:Remains() then
-		return SteadyShot
-	end
-	if ArcaneShot:Usable() and (Player.moving or (use_as and no_clip)) then
+	if ArcaneShot:Usable() and (Player.moving or (use_arcane and AutoShot:Remains() < 0.5)) then
 		return ArcaneShot
 	end
-	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) and (Player.moving or use_ss) then
+	if MultiShot:Usable() and use_multi then
+		return MultiShot
+	end
+	if ArcaneShot:Usable() and use_arcane and no_clip then
+		return ArcaneShot
+	end
+	if SteadyShot:Usable() and SteadyShot:CastTime() < (AutoShot:Remains() + 0.5) then
+		return SteadyShot
+	end
+	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) and (Player.moving or use_sting) then
 		return SerpentSting
 	end
 end
