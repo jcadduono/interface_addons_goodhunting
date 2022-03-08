@@ -759,11 +759,11 @@ function Ability:CastSuccess(dstGUID)
 		}
 		self.next_castGUID = nil
 	end
-	if Opt.previous and ghPanel:IsVisible() then
+	if Opt.previous then
 		ghPreviousPanel.ability = self
 		ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 		ghPreviousPanel.icon:SetTexture(self.icon)
-		ghPreviousPanel:Show()
+		ghPreviousPanel:SetShown(ghPanel:IsVisible())
 	end
 	if self.aura_targets and self.requires_react then
 		self:RemoveAura(self.auraTarget == 'player' and Player.guid or dstGUID)
@@ -771,6 +771,9 @@ function Ability:CastSuccess(dstGUID)
 end
 
 function Ability:CastLanded(dstGUID, event)
+	if Opt.previous and Opt.miss_effect and event == 'SPELL_MISSED' and ghPreviousPanel.ability == self then
+		ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'misseffect.blp')
+	end
 	if not self.traveling then
 		return
 	end
@@ -1828,6 +1831,13 @@ function UI:UpdateCombat()
 		ghInterruptPanel.border:SetShown(Player.interrupt)
 		ghInterruptPanel:SetShown(start)
 	end
+	if Opt.previous and ghPreviousPanel.ability then
+		if (Player.time - ghPreviousPanel.ability.last_used) > 10 then
+			ghPreviousPanel.ability = nil
+			ghPreviousPanel:Hide()
+		end
+	end
+
 	ghPanel.icon:SetShown(Player.main)
 	ghPanel.border:SetShown(Player.main)
 	ghCooldownPanel:SetShown(Player.cd)
@@ -2008,9 +2018,6 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 	end
 	if event == 'RANGE_DAMAGE' or event == 'SPELL_DAMAGE' or event == 'SPELL_ABSORBED' or event == 'SPELL_MISSED' or event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
 		ability:CastLanded(dstGUID, event)
-		if Opt.previous and Opt.miss_effect and event == 'SPELL_MISSED' and ghPanel:IsVisible() and ability == ghPreviousPanel.ability then
-			ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'misseffect.blp')
-		end
 	end
 end
 
