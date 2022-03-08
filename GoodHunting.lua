@@ -1165,12 +1165,12 @@ function Player:UpdateThreat()
 end
 
 function Player:UpdatePet()
-	self.pet.guid = UnitGUID('pet')
-	self.pet.alive = self.pet.guid and not UnitIsDead('pet') and true
-	self.pet.active = (self.pet.alive and not self.pet.stuck or IsFlying()) and true
-	self.pet.health = self.pet.alive and UnitHealth('pet') or 0
-	self.pet.health_max = self.pet.alive and UnitHealthMax('pet') or 0
-	self.pet.happiness = self.pet.alive and GetPetHappiness() or 2
+	self.pet.guid = UnitGUID('pet') or self.pet.guid
+	self.pet.alive = not UnitIsDead('pet') or RevivePet:Casting()
+	self.pet.active = (self.pet.alive and not self.pet.stuck and UnitExists('pet')) or RevivePet:Casting()
+	self.pet.health = UnitHealth('pet')
+	self.pet.health_max = UnitHealthMax('pet')
+	self.pet.happiness = GetPetHappiness() or 2
 end
 
 function Player:Update()
@@ -1394,10 +1394,7 @@ function SerpentSting:Usable()
 end
 
 function CallPet:Usable()
-	if Player.pet.active or RevivePet:Casting() then
-		return false
-	end
-	if Player.pet.guid and UnitIsDead('pet') then
+	if Player.pet.active or not Player.pet.alive or RevivePet:Casting() or UnitOnTaxi('player') or IsFlying() then
 		return false
 	end
 	return Ability.Usable(self)
@@ -1411,9 +1408,6 @@ function FeedPet:Usable()
 end
 
 function MendPet:Usable()
-	if not Player.pet.alive then
-		return false
-	end
 	if Opt.mend_threshold == 0 or (Player.pet.health / Player.pet.health_max * 100) >= Opt.mend_threshold then
 		return false
 	end
@@ -1421,10 +1415,7 @@ function MendPet:Usable()
 end
 
 function RevivePet:Usable()
-	if not Player.pet.guid or Player.pet.alive then
-		return false
-	end
-	if self:Casting() then
+	if Player.pet.alive or self:Casting() then
 		return false
 	end
 	return Ability.Usable(self)
@@ -1453,16 +1444,17 @@ end
 local APL = {}
 
 APL.main = function(self)
-	if RevivePet:Usable() then
-		UseExtra(RevivePet)
-	elseif CallPet:Usable() then
+	if CallPet:Usable() then
 		UseExtra(CallPet)
+	elseif RevivePet:Usable() then
+		UseExtra(RevivePet)
 	elseif MendPet:Usable() and MendPet:Down() then
 		UseExtra(MendPet)
-	elseif FeedPet:Usable() and FeedPet.buff:Down() and Player:TimeInCombat() == 0 then
-		UseExtra(FeedPet)
 	end
 	if Player:TimeInCombat() == 0 then
+		if FeedPet:Usable() and FeedPet.buff:Down() then
+			UseExtra(FeedPet)
+		end
 		if Target.hostile then
 			if AspectOfTheViper:Usable() and AspectOfTheViper:Down() and Player:ManaPct() < Opt.viper_low then
 				return AspectOfTheViper
