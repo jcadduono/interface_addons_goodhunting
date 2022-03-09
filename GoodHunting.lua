@@ -741,7 +741,9 @@ function Ability:CastStart(dstGUID)
 end
 
 function Ability:CastFailed(dstGUID)
-	return
+	if self.swing_queue then
+		self.queued = false
+	end
 end
 
 function Ability:CastSuccess(dstGUID)
@@ -750,6 +752,15 @@ function Ability:CastSuccess(dstGUID)
 	if self.triggers_gcd then
 		Player.previous_gcd[10] = nil
 		table.insert(Player.previous_gcd, 1, self)
+	end
+	if self.swing_queue then
+		self.queued = false
+	end
+	if self.mana_cost > 0 then
+		Player.mana.fsr_break = self.last_used
+	end
+	if self.aura_targets and self.requires_react then
+		self:RemoveAura(self.auraTarget == 'player' and Player.guid or dstGUID)
 	end
 	if self.traveling and self.next_castGUID then
 		self.traveling[self.next_castGUID] = {
@@ -765,29 +776,25 @@ function Ability:CastSuccess(dstGUID)
 		ghPreviousPanel.icon:SetTexture(self.icon)
 		ghPreviousPanel:SetShown(ghPanel:IsVisible())
 	end
-	if self.aura_targets and self.requires_react then
-		self:RemoveAura(self.auraTarget == 'player' and Player.guid or dstGUID)
-	end
 end
 
 function Ability:CastLanded(dstGUID, event)
-	if Opt.previous and Opt.miss_effect and event == 'SPELL_MISSED' and ghPreviousPanel.ability == self then
-		ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'misseffect.blp')
-	end
-	if not self.traveling then
-		return
-	end
-	local oldest
-	for guid, cast in next, self.traveling do
-		if Player.time - cast.start >= self.max_range / self.velocity + 0.2 then
-			self.traveling[guid] = nil -- spell traveled 0.2s past max range, delete it, this should never happen
-		elseif cast.dstGUID == dstGUID and (not oldest or cast.start < oldest.start) then
-			oldest = cast
+	if self.traveling then
+		local oldest
+		for guid, cast in next, self.traveling do
+			if Player.time - cast.start >= self.max_range / self.velocity + 0.2 then
+				self.traveling[guid] = nil -- spell traveled 0.2s past max range, delete it, this should never happen
+			elseif cast.dstGUID == dstGUID and (not oldest or cast.start < oldest.start) then
+				oldest = cast
+			end
+		end
+		if oldest then
+			Target.estimated_range = min(self.max_range, floor(self.velocity * max(0, Player.time - oldest.start)))
+			self.traveling[oldest.guid] = nil
 		end
 	end
-	if oldest then
-		Target.estimated_range = min(self.max_range, floor(self.velocity * max(0, Player.time - oldest.start)))
-		self.traveling[oldest.guid] = nil
+	if Opt.previous and Opt.miss_effect and event == 'SPELL_MISSED' and ghPreviousPanel.ability == self then
+		ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'misseffect.blp')
 	end
 end
 
@@ -1086,6 +1093,14 @@ function Player:Equipped(itemID, slot)
 	return false
 end
 
+function Player:UpdateTime(timeStamp)
+	self.ctime = GetTime()
+	if timeStamp then
+		self.time_diff = self.ctime - timeStamp
+	end
+	self.time = self.ctime - self.time_diff
+end
+
 function Player:UpdateAbilities()
 	local int = UnitStat('player', 4)
 	self.mana.max = UnitPowerMax('player', 0)
@@ -1178,13 +1193,12 @@ end
 
 function Player:Update()
 	local _, start, duration, remains, spellId, speed, max_speed
-	self.ctime = GetTime()
-	self.time = self.ctime - self.time_diff
-	self.main =  nil
+	self.main = nil
 	self.cd = nil
 	self.interrupt = nil
 	self.extra = nil
 	self.wait_seconds = nil
+	self:UpdateTime()
 	start, duration = GetSpellCooldown(47524)
 	self.gcd_remains = start > 0 and duration - (self.ctime - start) or 0
 	_, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
@@ -1873,9 +1887,7 @@ function events:ADDON_LOADED(name)
 end
 
 CombatEvent.TRIGGER = function(timeStamp, event, _, srcGUID, _, _, _, dstGUID, _, _, _, ...)
-	Player.time = timeStamp
-	Player.ctime = GetTime()
-	Player.time_diff = Player.ctime - Player.time
+	Player:UpdateTime(timeStamp)
 	local e = event
 	if (
 	   e == 'UNIT_DESTROYED' or
@@ -1916,10 +1928,8 @@ CombatEvent.SWING_DAMAGE = function(event, srcGUID, dstGUID, amount, overkill, s
 		Player.pet.stuck = false
 		return
 	end
-	if srcGUID == Player.guid and critical then
-		if KillCommand.known then
-			KillCommand:ApplyAura(srcGUID)
-		end
+	if KillCommand.known and srcGUID == Player.guid and critical then
+		KillCommand:ApplyAura(srcGUID)
 	end
 	if not (dstGUID == Player.guid or dstGUID == Player.pet.guid) then
 		return
@@ -1970,12 +1980,6 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 		return
 	end
 
-	if (event == 'RANGE_DAMAGE' or event == 'SPELL_DAMAGE') and critical then
-		if KillCommand.known then
-			KillCommand:ApplyAura(srcGUID)
-		end
-	end
-
 	local ability = spellId and abilities.bySpellId[spellId]
 	if not ability then
 		--print(format('EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d', event, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0))
@@ -2018,6 +2022,9 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 	end
 	if event == 'RANGE_DAMAGE' or event == 'SPELL_DAMAGE' or event == 'SPELL_ABSORBED' or event == 'SPELL_MISSED' or event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
 		ability:CastLanded(dstGUID, event)
+		if KillCommand.known and (event == 'RANGE_DAMAGE' or event == 'SPELL_DAMAGE') and critical and ability.tick_interval == 0 then
+			KillCommand:ApplyAura(srcGUID)
+		end
 	end
 end
 
@@ -2142,17 +2149,22 @@ function events:UI_ERROR_MESSAGE(errorId)
 	end
 end
 
-function events:UNIT_SPELLCAST_START(srcName)
+function events:UNIT_SPELLCAST_START(srcName, castGUID, spellId)
 	if Opt.interrupt and srcName == 'target' then
 		UI:UpdateCombatWithin(0.05)
 	end
 end
 
-function events:UNIT_SPELLCAST_STOP(srcName)
+function events:UNIT_SPELLCAST_STOP(srcName, castGUID, spellId)
 	if Opt.interrupt and srcName == 'target' then
 		UI:UpdateCombatWithin(0.05)
 	end
+	if srcName == 'player' and spellId == AutoShot.spellId then
+		AutoShot:CastFailed()
+	end
 end
+events.UNIT_SPELLCAST_FAILED = events.UNIT_SPELLCAST_STOP
+events.UNIT_SPELLCAST_INTERRUPTED = events.UNIT_SPELLCAST_STOP
 
 function events:UNIT_SPELLCAST_SENT(srcName, dstName, castGUID, spellId)
 	if srcName ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
@@ -2167,20 +2179,6 @@ function events:UNIT_SPELLCAST_SENT(srcName, dstName, castGUID, spellId)
 	end
 end
 
-function events:UNIT_SPELLCAST_FAILED(srcName, castGUID, spellId)
-	if srcName ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
-		return
-	end
-	local ability = abilities.bySpellId[spellId]
-	if not ability then
-		return
-	end
-	if ability.swing_queue then
-		ability.queued = false
-	end
-end
-events.UNIT_SPELLCAST_FAILED_QUIET = events.UNIT_SPELLCAST_FAILED
-
 function events:UNIT_SPELLCAST_SUCCEEDED(srcName, castGUID, spellId)
 	if srcName ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
 		return
@@ -2189,17 +2187,12 @@ function events:UNIT_SPELLCAST_SUCCEEDED(srcName, castGUID, spellId)
 	if not ability then
 		return
 	end
+	Player:UpdateTime()
 	if ability.traveling then
 		ability.next_castGUID = castGUID
 	end
-	if ability.swing_queue then
-		ability.queued = false
-	end
-	if ability.mana_cost > 0 then
-		Player.mana.fsr_break = GetTime()
-	end
 	if ability == FeignDeath then
-		ability:CastSuccess() -- Feign Death doesn't have a CLEU trigger, so this is a workaround
+		ability:CastSuccess(Player.guid) -- Feign Death doesn't have a CLEU trigger, so this is a workaround
 	end
 end
 
@@ -2212,6 +2205,7 @@ function events:UNIT_POWER_FREQUENT(srcName, powerType)
 end
 
 function events:MIRROR_TIMER_STOP(timer)
+	Player:UpdateTime()
 	if timer == 'FEIGNDEATH' then
 		AutoShot:Reset()
 	end
