@@ -756,9 +756,7 @@ function Ability:CastStart(dstGUID)
 end
 
 function Ability:CastFailed(dstGUID)
-	if self.swing_queue then
-		self.queued = false
-	end
+	return
 end
 
 function Ability:CastSuccess(dstGUID)
@@ -792,7 +790,6 @@ end
 
 function Ability:CastLanded(dstGUID, event)
 	if self.swing_queue then
-		self.queued = false
 		CombatEvent.PLAYER_SWING(false, event == 'SPELL_MISSED')
 	end
 	if self.traveling then
@@ -1166,6 +1163,7 @@ function Player:UpdateAbilities()
 	abilities.velocity = {}
 	abilities.autoAoe = {}
 	abilities.trackAuras = {}
+	abilities.swingQueue = {}
 	for _, ability in next, abilities.all do
 		if ability.known then
 			for i, spellId in next, ability.spellIds do
@@ -1179,6 +1177,9 @@ function Player:UpdateAbilities()
 			end
 			if ability.aura_targets then
 				abilities.trackAuras[#abilities.trackAuras + 1] = ability
+			end
+			if ability.swing_queue then
+				abilities.swingQueue[#abilities.swingQueue + 1] = ability
 			end
 		end
 	end
@@ -1530,7 +1531,7 @@ APL.main = function(self)
 		if KillCommand:Usable() then
 			UseCooldown(KillCommand)
 		end
-		if Player.threat.status >= 3 and Player.swing.active then
+		if Player.swing.active then
 			if RaptorStrike:Usable() then
 				UseCooldown(RaptorStrike)
 			end
@@ -1762,7 +1763,7 @@ function UI:UpdateShotTimers()
 
 	if Opt.swing_timer then
 		local mh = Player.swing.mh.next - (now - Player.time_diff)
-		if mh > 0 or RaptorStrike.queued then
+		if mh > 0 or Player.ability_queued then
 			text_bl = format('%.1f', max(0, mh))
 		end
 	end
@@ -2102,6 +2103,65 @@ function events:UNIT_FLAGS(unitID)
 	end
 end
 
+function events:UNIT_POWER_FREQUENT(unitID, powerType)
+	if unitID ~= 'player' then
+		return
+	elseif powerType == 'MANA' then
+		Player:ManaTick()
+	end
+end
+
+function events:UNIT_SPELLCAST_START(unitID, castGUID, spellId)
+	if Opt.interrupt and unitID == 'target' then
+		UI:UpdateCombatWithin(0.05)
+	end
+end
+
+function events:UNIT_SPELLCAST_STOP(unitID, castGUID, spellId)
+	if Opt.interrupt and unitID == 'target' then
+		UI:UpdateCombatWithin(0.05)
+	end
+	if unitID == 'player' and spellId == AutoShot.spellId then
+		AutoShot:CastFailed()
+	end
+end
+events.UNIT_SPELLCAST_FAILED = events.UNIT_SPELLCAST_STOP
+events.UNIT_SPELLCAST_INTERRUPTED = events.UNIT_SPELLCAST_STOP
+
+function events:UNIT_SPELLCAST_SUCCEEDED(unitID, castGUID, spellId)
+	if unitID ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
+		return
+	end
+	local ability = abilities.bySpellId[spellId]
+	if not ability then
+		return
+	end
+	Player:UpdateTime()
+	if ability.traveling then
+		ability.next_castGUID = castGUID
+	end
+	if ability == FeignDeath then
+		ability:CastSuccess(Player.guid) -- Feign Death doesn't have a CLEU trigger, so this is a workaround
+	end
+end
+
+function events:CURRENT_SPELL_CAST_CHANGED()
+	Player.ability_queued = false
+	for _, ability in next, abilities.swingQueue do
+		ability.queued = false
+		for i, spellId in next, ability.spellIds do
+			if IsCurrentSpell(spellId) then
+				ability.queued = true
+				Player.ability_queued = ability
+				if Opt.swing_timer then
+					ghPanel.text.bl:SetTextColor(0.2, 0.8, 1, 1)
+				end
+				break
+			end
+		end
+	end
+end
+
 function events:PLAYER_REGEN_DISABLED()
 	Player.combat_start = GetTime() - Player.time_diff
 end
@@ -2200,64 +2260,6 @@ function events:UI_ERROR_MESSAGE(errorId)
 	    errorId == 400    -- no pet path to target
 	) then
 		Player.pet.stuck = true
-	end
-end
-
-function events:UNIT_SPELLCAST_START(srcName, castGUID, spellId)
-	if Opt.interrupt and srcName == 'target' then
-		UI:UpdateCombatWithin(0.05)
-	end
-end
-
-function events:UNIT_SPELLCAST_STOP(srcName, castGUID, spellId)
-	if Opt.interrupt and srcName == 'target' then
-		UI:UpdateCombatWithin(0.05)
-	end
-	if srcName == 'player' and spellId == AutoShot.spellId then
-		AutoShot:CastFailed()
-	end
-end
-events.UNIT_SPELLCAST_FAILED = events.UNIT_SPELLCAST_STOP
-events.UNIT_SPELLCAST_INTERRUPTED = events.UNIT_SPELLCAST_STOP
-
-function events:UNIT_SPELLCAST_SENT(srcName, dstName, castGUID, spellId)
-	if srcName ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
-		return
-	end
-	local ability = abilities.bySpellId[spellId]
-	if not ability then
-		return
-	end
-	if ability.swing_queue then
-		ability.queued = true
-		if Opt.swing_timer then
-			ghPanel.text.bl:SetTextColor(0.2, 0.8, 1, 1)
-		end
-	end
-end
-
-function events:UNIT_SPELLCAST_SUCCEEDED(srcName, castGUID, spellId)
-	if srcName ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
-		return
-	end
-	local ability = abilities.bySpellId[spellId]
-	if not ability then
-		return
-	end
-	Player:UpdateTime()
-	if ability.traveling then
-		ability.next_castGUID = castGUID
-	end
-	if ability == FeignDeath then
-		ability:CastSuccess(Player.guid) -- Feign Death doesn't have a CLEU trigger, so this is a workaround
-	end
-end
-
-function events:UNIT_POWER_FREQUENT(srcName, powerType)
-	if srcName ~= 'player' then
-		return
-	elseif powerType == 'MANA' then
-		Player:ManaTick()
 	end
 end
 
