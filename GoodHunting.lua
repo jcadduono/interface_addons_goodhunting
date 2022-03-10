@@ -14,6 +14,7 @@ local GetSpellCooldown = _G.GetSpellCooldown
 local GetSpellInfo = _G.GetSpellInfo
 local GetTime = _G.GetTime
 local GetUnitSpeed = _G.GetUnitSpeed
+local IsCurrentSpell = _G.IsCurrentSpell
 local UnitCastingInfo = _G.UnitCastingInfo
 local UnitChannelInfo = _G.UnitChannelInfo
 local UnitRangedDamage = _G.UnitRangedDamage
@@ -96,6 +97,7 @@ local function InitOpts()
 		cd_ttd = 8,
 		pot = false,
 		trinket = true,
+		swing_timer = true,
 		shot_timer = true,
 		shot_speed = true,
 		steady_macro = true,
@@ -159,6 +161,19 @@ local Player = {
 		lead = 0,
 	},
 	swing = {
+		mh = {
+			last = 0,
+			next = 0,
+			speed = 0,
+			remains = 0,
+		},
+		oh = {
+			last = 0,
+			next = 0,
+			speed = 0,
+			remains = 0,
+		},
+		active = false,
 		last_taken = 0,
 	},
 	pet = {
@@ -753,9 +768,6 @@ function Ability:CastSuccess(dstGUID)
 		Player.previous_gcd[10] = nil
 		table.insert(Player.previous_gcd, 1, self)
 	end
-	if self.swing_queue then
-		self.queued = false
-	end
 	if self.mana_cost > 0 then
 		Player.mana.fsr_break = self.last_used
 	end
@@ -779,6 +791,10 @@ function Ability:CastSuccess(dstGUID)
 end
 
 function Ability:CastLanded(dstGUID, event)
+	if self.swing_queue then
+		self.queued = false
+		CombatEvent.PLAYER_SWING(false, event == 'SPELL_MISSED')
+	end
 	if self.traveling then
 		local oldest
 		for guid, cast in next, self.traveling do
@@ -1218,6 +1234,9 @@ function Player:Update()
 		self.mana.current = self.mana.current + self.mana.per_tick
 	end
 	self.mana.current = max(0, min(self.mana.max, self.mana.current))
+	self.swing.active = IsCurrentSpell(6603)
+	self.swing.mh.remains = max(0, self.swing.mh.next - self.time - self.execute_remains)
+	self.swing.oh.remains = max(0, self.swing.oh.next - self.time - self.execute_remains)
 	speed, max_speed = GetUnitSpeed('player')
 	self.moving = speed ~= 0
 	self.movement_speed = max_speed / 7 * 100
@@ -1511,7 +1530,7 @@ APL.main = function(self)
 		if KillCommand:Usable() then
 			UseCooldown(KillCommand)
 		end
-		if Player.threat.status >= 3 and Player:UnderMeleeAttack() then
+		if Player.threat.status >= 3 and Player.swing.active then
 			if RaptorStrike:Usable() then
 				UseCooldown(RaptorStrike)
 			end
@@ -1519,10 +1538,10 @@ APL.main = function(self)
 				return MongooseBite
 			end
 		end
-		if ExplosiveTrap:Usable() and Player:UnderMeleeAttack() and Player.enemies > 1 then
+		if ExplosiveTrap:Usable() and (Player.swing.active or Player:UnderMeleeAttack()) and Player.enemies > 1 then
 			UseCooldown(ExplosiveTrap)
 		end
-		if ImmolationTrap:Usable() and Player:UnderMeleeAttack() and Player.enemies == 1 and Target.timeToDie > (ImmolationTrap.dot:TickTime() * 3) then
+		if ImmolationTrap:Usable() and (Player.swing.active or Player:UnderMeleeAttack()) and Player.enemies == 1 and Target.timeToDie > (ImmolationTrap.dot:TickTime() * 3) then
 			UseCooldown(ImmolationTrap)
 		end
 		if HuntersMark:Usable() and HuntersMark:Down() and HuntersMark:Ticking() == 0 then
@@ -1738,10 +1757,16 @@ function UI:Disappear()
 end
 
 function UI:UpdateShotTimers()
-	local text_tl, text_tr
+	local text_bl, text_tl, text_tr
+	local now = GetTime()
 
+	if Opt.swing_timer then
+		local mh = Player.swing.mh.next - (now - Player.time_diff)
+		if mh > 0 or RaptorStrike.queued then
+			text_bl = format('%.1f', max(0, mh))
+		end
+	end
 	if Opt.shot_timer then
-		local now = GetTime()
 		local shot = AutoShot.next - (now - Player.time_diff)
 		local _, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
 		if spellId then
@@ -1763,6 +1788,7 @@ function UI:UpdateShotTimers()
 		text_tr = format('%.1f', AutoShot.speed)
 	end
 
+	ghPanel.text.bl:SetText(text_bl)
 	ghPanel.text.tl:SetText(text_tl)
 	ghPanel.text.tr:SetText(text_tr)
 end
@@ -1923,10 +1949,32 @@ CombatEvent.UNIT_DIED = function(event, srcGUID, dstGUID)
 	end
 end
 
+CombatEvent.PLAYER_SWING = function(offHand, missed)
+	local mh, oh = UnitAttackSpeed('player')
+	if offHand then
+		Player.swing.oh.speed = (oh or 0)
+		Player.swing.oh.last = Player.time
+		Player.swing.oh.next = Player.time + Player.swing.oh.speed
+	else
+		Player.swing.mh.speed = (mh or 0)
+		Player.swing.mh.last = Player.time
+		Player.swing.mh.next = Player.time + Player.swing.mh.speed
+		if Opt.swing_timer then
+			ghPanel.text.bl:SetTextColor(1, missed and 0 or 1, missed and 0 or 1, 1)
+		end
+	end
+end
+
 CombatEvent.SWING_DAMAGE = function(event, srcGUID, dstGUID, amount, overkill, spellSchool, resisted, blocked, absorbed, critical, glancing, crushing, offHand)
 	if Player.pet.stuck and srcGUID == Player.pet.guid then
 		Player.pet.stuck = false
 		return
+	end
+	if srcGUID == Player.guid then
+		CombatEvent.PLAYER_SWING(offHand, false)
+		if Opt.auto_aoe then
+			autoAoe:Add(dstGUID, true)
+		end
 	end
 	if KillCommand.known and srcGUID == Player.guid and critical then
 		KillCommand:ApplyAura(srcGUID)
@@ -1946,6 +1994,12 @@ CombatEvent.SWING_MISSED = function(event, srcGUID, dstGUID, missType, offHand, 
 	if Player.pet.stuck and srcGUID == Player.pet.guid then
 		Player.pet.stuck = false
 		return
+	end
+	if srcGUID == Player.guid then
+		CombatEvent.PLAYER_SWING(offHand, true)
+		if Opt.auto_aoe and not (missType == 'EVADE' or missType == 'IMMUNE') then
+			autoAoe:Add(dstGUID, true)
+		end
 	end
 	if not (dstGUID == Player.guid or dstGUID == Player.pet.guid) then
 		return
@@ -2054,10 +2108,10 @@ end
 
 function events:PLAYER_REGEN_ENABLED()
 	Player.combat_start = 0
-	Player.swing.last_taken = 0
 	Player.pet.stuck = false
-	Target.estimated_range = 30
 	Player.previous_gcd = {}
+	Player.swing.last_taken = 0
+	Target.estimated_range = 30
 	if Player.last_ability then
 		Player.last_ability = nil
 		ghPreviousPanel:Hide()
@@ -2176,6 +2230,9 @@ function events:UNIT_SPELLCAST_SENT(srcName, dstName, castGUID, spellId)
 	end
 	if ability.swing_queue then
 		ability.queued = true
+		if Opt.swing_timer then
+			ghPanel.text.bl:SetTextColor(0.2, 0.8, 1, 1)
+		end
 	end
 end
 
@@ -2488,6 +2545,12 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		end
 		return Status('Show on-use trinkets in cooldown UI', Opt.trinket)
 	end
+	if startsWith(msg[1], 'sw') then
+		if msg[2] then
+			Opt.swing_timer = msg[2] == 'on'
+		end
+		return Status('Show time remaining until next melee swing (bottom-left)', Opt.swing_timer)
+	end
 	if startsWith(msg[1], 'sh') then
 		if msg[2] then
 			Opt.shot_timer = msg[2] == 'on'
@@ -2556,6 +2619,7 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		'ttd |cFFFFD000[seconds]|r  - minimum enemy lifetime to use cooldowns on (default is 8 seconds, ignored on bosses)',
 		'pot |cFF00C000on|r/|cFFC00000off|r - show flasks and battle potions in cooldown UI',
 		'trinket |cFF00C000on|r/|cFFC00000off|r - show on-use trinkets in cooldown UI',
+		'swing |cFF00C000on|r/|cFFC00000off|r - show time remaining until next melee swing (bottom-left)',
 		'shot |cFF00C000on|r/|cFFC00000off|r - show time remaining until next Auto Shot (top-left)',
 		'speed |cFF00C000on|r/|cFFC00000off|r - show Auto Shot speed (top-right)',
 		'steady |cFF00C000on|r/|cFFC00000off|r  - enable this if using a Steady Shot macro that starts Auto Shot',
