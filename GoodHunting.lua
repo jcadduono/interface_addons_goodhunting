@@ -516,9 +516,9 @@ end
 
 function Ability:React()
 	if self.aura_targets then
-		local guid = self.auraTarget == 'player' and Player.guid or Target.guid
-		if self.aura_targets[guid] then
-			return max(0, self.aura_targets[guid].expires - Player.time - Player.execute_remains)
+		local aura = self.aura_targets[self.auraTarget == 'player' and Player.guid or Target.guid]
+		if aura then
+			return max(0, aura.expires - Player.time - Player.execute_remains)
 		end
 	end
 	return 0
@@ -790,7 +790,7 @@ end
 
 function Ability:CastLanded(dstGUID, event)
 	if self.swing_queue then
-		CombatEvent.PLAYER_SWING(false, event == 'SPELL_MISSED')
+		Player:ResetSwing(true, false, event == 'SPELL_MISSED')
 	end
 	if self.traveling then
 		local oldest
@@ -1074,6 +1074,23 @@ function Player:ManaTick(timerTrigger)
 		end
 	end
 	self.mana.tick_mana = mana
+end
+
+function Player:ResetSwing(mainHand, offHand, missed)
+	local mh, oh = UnitAttackSpeed('player')
+	if mainHand then
+		self.swing.mh.speed = (mh or 0)
+		self.swing.mh.last = self.time
+		self.swing.mh.next = self.time + self.swing.mh.speed
+		if Opt.swing_timer then
+			ghPanel.text.bl:SetTextColor(1, missed and 0 or 1, missed and 0 or 1, 1)
+		end
+	end
+	if offHand then
+		self.swing.oh.speed = (oh or 0)
+		self.swing.oh.last = self.time
+		self.swing.oh.next = self.time + self.swing.oh.speed
+	end
 end
 
 function Player:UnderMeleeAttack()
@@ -1552,32 +1569,35 @@ APL.main = function(self)
 	if RapidFire:Usable() and ((not Target.boss and Target.timeToDie > 15) or (Target.boss and Player:TimeInCombat() > 5 and (Bloodlust:Remains() > 10 or Target.healthPercentage < 20 or Target.timeToDie < 20 or Target.timeToDie > RapidFire:CooldownDuration() + 20))) then
 		UseCooldown(RapidFire)
 	end
-	local no_clip = not SteadyShot.known or (AutoShot:Remains() + AutoShot.speed - Player.gcd) > SteadyShot:CastTime()
-	local use_multi = Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 2))
-	local use_arcane = not SteadyShot.known or (Player:ManaPct() > min(Target.timeToDie, 10 + (Target.healthPercentage / 1.5)) and AspectOfTheViper:Down())
+	local ss_ct = SteadyShot:CastTime()
+	local use_multi = not SteadyShot.known or Player.enemies > 1 or Player:ManaPct() > min(Target.timeToDie, max(10, Target.healthPercentage / 2))
+	local use_arcane = not SteadyShot.known or (Player:ManaPct() > min(Target.timeToDie, max(10, Target.healthPercentage / 1.5)) and AspectOfTheViper:Down())
 	local use_sting = not SteadyShot.known or (Player:ManaPct() > 90 and AutoShot:Remains() > Player.gcd)
 	if ArcaneShot:Usable() and Player.enemies == 1 and Target.timeToDie < 2 then
 		return ArcaneShot
 	end
-	if MultiShot:Usable() and use_multi and (Target.timeToDie < 2 or between(AutoShot:Remains(), 0.5, SteadyShot:CastTime() + 0.5)) then
+	if MultiShot:Usable() and use_multi and (Target.timeToDie < 2 or AutoShot.speed < 1.3 or (AutoShot.speed <= 1.6 and AutoShot:Remains() == 0)) then
 		return MultiShot
 	end
 	if ExplosiveTrap:Usable() and Player.enemies >= 3 then
 		UseCooldown(ExplosiveTrap)
 	end
-	if SteadyShot:Usable() and ((Opt.steady_macro and not Player.moving and AutoShot:Remains() == 0) or (SteadyShot:FirstAfterShot() and SteadyShot:CastTime() < AutoShot:Remains())) then
+	if SteadyShot:Usable() and ((Opt.steady_macro and not Player.moving and AutoShot:Remains() == 0) or (SteadyShot:FirstAfterShot() and ss_ct < AutoShot:Remains())) then
 		return SteadyShot
 	end
-	if ArcaneShot:Usable() and (Player.moving or (use_arcane and AutoShot:Remains() < 0.5)) then
+	if ArcaneShot:Usable() and (Player.moving or (use_arcane and AutoShot.speed > 1.6 and AutoShot:Remains() > 0 and AutoShot:Remains() < 0.5 and MultiShot:Ready(1.5))) then
 		return ArcaneShot
 	end
 	if MultiShot:Usable() and use_multi then
 		return MultiShot
 	end
-	if ArcaneShot:Usable() and use_arcane and no_clip then
+	if SteadyShot:Usable() and ss_ct < AutoShot:Remains() then
+		return SteadyShot
+	end
+	if ArcaneShot:Usable() and use_arcane and AutoShot.speed > 1.6 then
 		return ArcaneShot
 	end
-	if SteadyShot:Usable() and SteadyShot:CastTime() < (AutoShot:Remains() + 0.5) then
+	if SteadyShot:Usable() and ss_ct < (AutoShot:Remains() + 0.5) then
 		return SteadyShot
 	end
 	if SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 5) and (Player.moving or use_sting) then
@@ -1950,29 +1970,13 @@ CombatEvent.UNIT_DIED = function(event, srcGUID, dstGUID)
 	end
 end
 
-CombatEvent.PLAYER_SWING = function(offHand, missed)
-	local mh, oh = UnitAttackSpeed('player')
-	if offHand then
-		Player.swing.oh.speed = (oh or 0)
-		Player.swing.oh.last = Player.time
-		Player.swing.oh.next = Player.time + Player.swing.oh.speed
-	else
-		Player.swing.mh.speed = (mh or 0)
-		Player.swing.mh.last = Player.time
-		Player.swing.mh.next = Player.time + Player.swing.mh.speed
-		if Opt.swing_timer then
-			ghPanel.text.bl:SetTextColor(1, missed and 0 or 1, missed and 0 or 1, 1)
-		end
-	end
-end
-
 CombatEvent.SWING_DAMAGE = function(event, srcGUID, dstGUID, amount, overkill, spellSchool, resisted, blocked, absorbed, critical, glancing, crushing, offHand)
 	if Player.pet.stuck and srcGUID == Player.pet.guid then
 		Player.pet.stuck = false
 		return
 	end
 	if srcGUID == Player.guid then
-		CombatEvent.PLAYER_SWING(offHand, false)
+		Player:ResetSwing(not offHand, offHand)
 		if Opt.auto_aoe then
 			autoAoe:Add(dstGUID, true)
 		end
@@ -1997,7 +2001,7 @@ CombatEvent.SWING_MISSED = function(event, srcGUID, dstGUID, missType, offHand, 
 		return
 	end
 	if srcGUID == Player.guid then
-		CombatEvent.PLAYER_SWING(offHand, true)
+		Player:ResetSwing(not offHand, offHand, true)
 		if Opt.auto_aoe and not (missType == 'EVADE' or missType == 'IMMUNE') then
 			autoAoe:Add(dstGUID, true)
 		end
@@ -2266,6 +2270,7 @@ end
 function events:MIRROR_TIMER_STOP(timer)
 	Player:UpdateTime()
 	if timer == 'FEIGNDEATH' then
+		Player:ResetSwing(true, true)
 		AutoShot:Reset()
 	end
 end
