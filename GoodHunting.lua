@@ -6,11 +6,22 @@ end
 local ADDON_PATH = 'Interface\\AddOns\\' .. ADDON .. '\\'
 
 -- copy heavily accessed global functions into local scope for performance
-local GetSpellCooldown = _G.GetSpellCooldown
+local min = math.min
+local max = math.max
+local floor = math.floor
 local GetSpellCharges = _G.GetSpellCharges
+local GetSpellCooldown = _G.GetSpellCooldown
+local GetSpellInfo = _G.GetSpellInfo
 local GetTime = _G.GetTime
-local UnitCastingInfo = _G.UnitCastingInfo
+local GetUnitSpeed = _G.GetUnitSpeed
 local UnitAura = _G.UnitAura
+local UnitCastingInfo = _G.UnitCastingInfo
+local UnitChannelInfo = _G.UnitChannelInfo
+local UnitHealth = _G.UnitHealth
+local UnitHealthMax = _G.UnitHealthMax
+local UnitPower = _G.UnitPower
+local UnitPowerMax = _G.UnitPowerMax
+local UnitDetailedThreatSituation = _G.UnitDetailedThreatSituation
 -- end copy global functions
 
 -- useful functions
@@ -34,7 +45,6 @@ BINDING_HEADER_GOODHUNTING = ADDON
 
 local function InitOpts()
 	local function SetDefaults(t, ref)
-		local k, v
 		for k, v in next, ref do
 			if t[k] == nil then
 				local pchar
@@ -101,13 +111,16 @@ local UI = {
 	glows = {},
 }
 
+-- combat event related functions container
+local CombatEvent = {}
+
 -- automatically registered events container
 local events = {}
 
 local timer = {
 	combat = 0,
 	display = 0,
-	health = 0
+	health = 0,
 }
 
 -- specialization constants
@@ -124,20 +137,60 @@ local Player = {
 	time_diff = 0,
 	ctime = 0,
 	combat_start = 0,
+	level = 1,
 	spec = 0,
 	target_mode = 0,
 	gcd = 1.5,
-	health = 0,
-	health_max = 0,
-	focus = 0,
-	focus_regen = 0,
-	focus_max = 100,
+	gcd_remains = 0,
+	cast_remains = 0,
+	execute_remains = 0,
+	haste_factor = 1,
+	health = {
+		current = 0,
+		max = 100,
+	},
+	focus = {
+		current = 0,
+		regen = 0,
+		max = 100,
+	},
+	pet = {
+		active = false,
+		alive = false,
+		stuck = false,
+		health = {
+			current = 0,
+			max = 100,
+		},
+	},
 	moving = false,
 	movement_speed = 100,
-	last_swing_taken = 0,
+	threat = {
+		status = 0,
+		pct = 0,
+		lead = 0,
+	},
+	swing = {
+		mh = {
+			last = 0,
+			next = 0,
+			speed = 0,
+			remains = 0,
+		},
+		oh = {
+			last = 0,
+			next = 0,
+			speed = 0,
+			remains = 0,
+		},
+		last_taken = 0,
+	},
+	set_bonus = {
+		t28_2p = false,
+		t28_4p = false,
+	},
 	previous_gcd = {},-- list of previous GCD abilities
 	item_use_blacklist = { -- list of item IDs with on-use effects we should mark unusable
-		[174044] = true, -- Humming Black Dragonscale (parachute)
 	},
 }
 
@@ -145,7 +198,13 @@ local Player = {
 local Target = {
 	boss = false,
 	guid = 0,
-	health_array = {},
+	health = {
+		current = 0,
+		loss_per_sec = 0,
+		max = 100,
+		pct = 100,
+		history = {},
+	},
 	hostile = false,
 	estimated_range = 30,
 }
@@ -223,8 +282,17 @@ ghCooldownPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
 ghCooldownPanel.border = ghCooldownPanel:CreateTexture(nil, 'ARTWORK')
 ghCooldownPanel.border:SetAllPoints(ghCooldownPanel)
 ghCooldownPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
-ghCooldownPanel.cd = CreateFrame('Cooldown', nil, ghCooldownPanel, 'CooldownFrameTemplate')
-ghCooldownPanel.cd:SetAllPoints(ghCooldownPanel)
+ghCooldownPanel.dimmer = ghCooldownPanel:CreateTexture(nil, 'BORDER')
+ghCooldownPanel.dimmer:SetAllPoints(ghCooldownPanel)
+ghCooldownPanel.dimmer:SetColorTexture(0, 0, 0, 0.6)
+ghCooldownPanel.dimmer:Hide()
+ghCooldownPanel.swipe = CreateFrame('Cooldown', nil, ghCooldownPanel, 'CooldownFrameTemplate')
+ghCooldownPanel.swipe:SetAllPoints(ghCooldownPanel)
+ghCooldownPanel.text = ghCooldownPanel:CreateFontString(nil, 'OVERLAY')
+ghCooldownPanel.text:SetFont('Fonts\\FRIZQT__.TTF', 12, 'OUTLINE')
+ghCooldownPanel.text:SetAllPoints(ghCooldownPanel)
+ghCooldownPanel.text:SetJustifyH('CENTER')
+ghCooldownPanel.text:SetJustifyV('CENTER')
 local ghInterruptPanel = CreateFrame('Frame', 'ghInterruptPanel', UIParent)
 ghInterruptPanel:SetFrameStrata('BACKGROUND')
 ghInterruptPanel:SetSize(64, 64)
@@ -239,8 +307,8 @@ ghInterruptPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
 ghInterruptPanel.border = ghInterruptPanel:CreateTexture(nil, 'ARTWORK')
 ghInterruptPanel.border:SetAllPoints(ghInterruptPanel)
 ghInterruptPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
-ghInterruptPanel.cast = CreateFrame('Cooldown', nil, ghInterruptPanel, 'CooldownFrameTemplate')
-ghInterruptPanel.cast:SetAllPoints(ghInterruptPanel)
+ghInterruptPanel.swipe = CreateFrame('Cooldown', nil, ghInterruptPanel, 'CooldownFrameTemplate')
+ghInterruptPanel.swipe:SetAllPoints(ghInterruptPanel)
 local ghExtraPanel = CreateFrame('Frame', 'ghExtraPanel', UIParent)
 ghExtraPanel:SetFrameStrata('BACKGROUND')
 ghExtraPanel:SetSize(64, 64)
@@ -295,7 +363,7 @@ function Player:SetTargetMode(mode)
 	if mode == self.target_mode then
 		return
 	end
-	self.target_mode = min(mode, #self.target_modes[self.spec])
+	self.target_mode = min(#self.target_modes[self.spec], mode)
 	self.enemies = self.target_modes[self.spec][self.target_mode][1]
 	ghPanel.text.br:SetText(self.target_modes[self.spec][self.target_mode][2])
 end
@@ -361,14 +429,13 @@ function autoAoe:Remove(guid)
 end
 
 function autoAoe:Clear()
-	local guid
 	for guid in next, self.targets do
 		self.targets[guid] = nil
 	end
 end
 
 function autoAoe:Update()
-	local count, i = 0
+	local count = 0
 	for i in next, self.targets do
 		count = count + 1
 	end
@@ -387,7 +454,7 @@ function autoAoe:Update()
 end
 
 function autoAoe:Purge()
-	local update, guid, t
+	local update
 	for guid, t in next, self.targets do
 		if Player.time - t > Opt.auto_aoe_ttl then
 			self.targets[guid] = nil
@@ -412,7 +479,11 @@ end
 local Ability = {}
 Ability.__index = Ability
 local abilities = {
-	all = {}
+	all = {},
+	bySpellId = {},
+	velocity = {},
+	autoAoe = {},
+	trackAuras = {},
 }
 
 function Ability:Add(spellId, buff, player, spellId2)
@@ -423,6 +494,7 @@ function Ability:Add(spellId, buff, player, spellId2)
 		name = false,
 		icon = false,
 		requires_charge = false,
+		requires_react = false,
 		requires_pet = false,
 		triggers_gcd = true,
 		hasted_duration = false,
@@ -456,17 +528,19 @@ function Ability:Match(spell)
 end
 
 function Ability:Ready(seconds)
-	return self:Cooldown() <= (seconds or 0)
+	return self:Cooldown() <= (seconds or 0) and (not self.requires_react or self:React() > (seconds or 0))
 end
 
-function Ability:Usable(seconds)
+function Ability:Usable(seconds, pool)
 	if not self.known then
 		return false
 	end
-	if self:Cost() > Player.focus then
-		return false
+	if not pool then
+		if self:Cost() > Player.focus.current then
+			return false
+		end
 	end
-	if self.requires_pet and not Player.pet_active then
+	if self.requires_pet and not Player.pet.active then
 		return false
 	end
 	if self.requires_charge and self:Charges() == 0 then
@@ -476,10 +550,10 @@ function Ability:Usable(seconds)
 end
 
 function Ability:Remains()
-	if self:Casting() or self:Traveling() then
+	if self:Casting() or self:Traveling() > 0 then
 		return self:Duration()
 	end
-	local _, i, id, expires
+	local _, id, expires
 	for i = 1, 40 do
 		_, _, _, _, _, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
 		if not id then
@@ -488,7 +562,7 @@ function Ability:Remains()
 			if expires == 0 then
 				return 600 -- infinite duration
 			end
-			return max(expires - Player.ctime - Player.execute_remains, 0)
+			return max(0, expires - Player.ctime - Player.execute_remains)
 		end
 	end
 	return 0
@@ -512,20 +586,26 @@ end
 function Ability:SetVelocity(velocity)
 	if velocity > 0 then
 		self.velocity = velocity
-		self.travel_start = {}
+		self.traveling = {}
 	else
-		self.travel_start = nil
+		self.traveling = nil
 		self.velocity = 0
 	end
 end
 
-function Ability:Traveling()
-	if self.travel_start and self.travel_start[Target.guid] then
-		if Player.time - self.travel_start[Target.guid] < self.max_range / self.velocity then
-			return true
-		end
-		self.travel_start[Target.guid] = nil
+function Ability:Traveling(all)
+	if not self.traveling then
+		return 0
 	end
+	local count = 0
+	for _, cast in next, self.traveling do
+		if all or cast.dstGUID == Target.guid then
+			if Player.time - cast.start < self.max_range / self.velocity then
+				count = count + 1
+			end
+		end
+	end
+	return count
 end
 
 function Ability:TravelTime()
@@ -533,16 +613,25 @@ function Ability:TravelTime()
 end
 
 function Ability:Ticking()
+	local count, ticking = 0, {}
 	if self.aura_targets then
-		local count, guid, aura = 0
 		for guid, aura in next, self.aura_targets do
 			if aura.expires - Player.time > Player.execute_remains then
-				count = count + 1
+				ticking[guid] = true
 			end
 		end
-		return count
 	end
-	return self:Up() and 1 or 0
+	if self.traveling then
+		for _, cast in next, self.traveling do
+			if Player.time - cast.start < self.max_range / self.velocity then
+				ticking[cast.dstGUID] = true
+			end
+		end
+	end
+	for _ in next, ticking do
+		count = count + 1
+	end
+	return count
 end
 
 function Ability:TickTime()
@@ -565,7 +654,7 @@ function Ability:Cooldown()
 end
 
 function Ability:Stack()
-	local _, i, id, expires, count
+	local _, id, expires, count
 	for i = 1, 40 do
 		_, _, count, _, _, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
 		if not id then
@@ -581,20 +670,32 @@ function Ability:Cost()
 	return self.focus_cost
 end
 
-function Ability:Charges()
-	return (GetSpellCharges(self.spellId)) or 0
-end
-
 function Ability:ChargesFractional()
 	local charges, max_charges, recharge_start, recharge_time = GetSpellCharges(self.spellId)
+	if self:Casting() then
+		if charges >= max_charges then
+			return charges - 1
+		end
+		charges = charges - 1
+	end
 	if charges >= max_charges then
 		return charges
 	end
 	return charges + ((max(0, Player.ctime - recharge_start + Player.execute_remains)) / recharge_time)
 end
 
+function Ability:Charges()
+	return floor(self:ChargesFractional())
+end
+
 function Ability:FullRechargeTime()
 	local charges, max_charges, recharge_start, recharge_time = GetSpellCharges(self.spellId)
+	if self:Casting() then
+		if charges >= max_charges then
+			return recharge_time
+		end
+		charges = charges - 1
+	end
 	if charges >= max_charges then
 		return 0
 	end
@@ -627,11 +728,11 @@ function Ability:CastTime()
 end
 
 function Ability:CastRegen()
-	return Player.focus_regen * self:CastTime() - self:Cost()
+	return Player.focus.regen * self:CastTime() - self:Cost()
 end
 
 function Ability:WontCapFocus(reduction)
-	return (Player.focus + self:CastRegen()) < (Player.focus_max - (reduction or 5))
+	return (Player.focus.current + self:CastRegen()) < (Player.focus.max - (reduction or 5))
 end
 
 function Ability:Previous(n)
@@ -648,7 +749,8 @@ end
 function Ability:AutoAoe(removeUnaffected, trigger)
 	self.auto_aoe = {
 		remove = removeUnaffected,
-		targets = {}
+		targets = {},
+		target_count = 0,
 	}
 	if trigger == 'periodic' then
 		self.auto_aoe.trigger = 'SPELL_PERIODIC_DAMAGE'
@@ -672,21 +774,99 @@ function Ability:UpdateTargetsHit()
 		if self.auto_aoe.remove then
 			autoAoe:Clear()
 		end
-		local guid
+		self.auto_aoe.target_count = 0
 		for guid in next, self.auto_aoe.targets do
 			autoAoe:Add(guid)
 			self.auto_aoe.targets[guid] = nil
+			self.auto_aoe.target_count = self.auto_aoe.target_count + 1
 		end
 		autoAoe:Update()
 	end
 end
 
--- start DoT tracking
+function Ability:Targets()
+	if self.auto_aoe and self:Up() then
+		return self.auto_aoe.target_count
+	end
+	return 0
+end
+
+function Ability:CastStart(dstGUID)
+	return
+end
+
+function Ability:CastFailed(dstGUID, missType)
+	if self.requires_pet and missType == 'No path available' then
+		Player.pet.stuck = true
+	end
+end
+
+function Ability:CastSuccess(dstGUID)
+	self.last_used = Player.time
+	Player.last_ability = self
+	if self.triggers_gcd then
+		Player.previous_gcd[10] = nil
+		table.insert(Player.previous_gcd, 1, self)
+	end
+	if self.aura_targets and self.requires_react then
+		if self.activated then
+			self.activated = false
+		end
+		self:RemoveAura(self.auraTarget == 'player' and Player.guid or dstGUID)
+	end
+	if self.requires_pet then
+		Player.pet.stuck = false
+	end
+	if self.traveling and self.next_castGUID then
+		self.traveling[self.next_castGUID] = {
+			guid = self.next_castGUID,
+			start = self.last_used,
+			dstGUID = dstGUID,
+		}
+		self.next_castGUID = nil
+	end
+	if Opt.previous then
+		ghPreviousPanel.ability = self
+		ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
+		ghPreviousPanel.icon:SetTexture(self.icon)
+		ghPreviousPanel:SetShown(ghPanel:IsVisible())
+	end
+end
+
+function Ability:CastLanded(dstGUID, event)
+	if self.swing_queue then
+		Player:ResetSwing(true, false, event == 'SPELL_MISSED')
+	end
+	if self.traveling then
+		local oldest
+		for guid, cast in next, self.traveling do
+			if Player.time - cast.start >= self.max_range / self.velocity + 0.2 then
+				self.traveling[guid] = nil -- spell traveled 0.2s past max range, delete it, this should never happen
+			elseif cast.dstGUID == dstGUID and (not oldest or cast.start < oldest.start) then
+				oldest = cast
+			end
+		end
+		if oldest then
+			Target.estimated_range = min(self.max_range, floor(self.velocity * max(0, Player.time - oldest.start)))
+			self.traveling[oldest.guid] = nil
+		end
+	end
+	if self.range_est_start then
+		Target.estimated_range = floor(max(5, min(self.max_range, self.velocity * (Player.time - self.range_est_start))))
+		self.range_est_start = nil
+	elseif self.max_range < Target.estimated_range then
+		Target.estimated_range = self.max_range
+	end
+	if Opt.previous and Opt.miss_effect and event == 'SPELL_MISSED' and ghPreviousPanel.ability == self then
+		ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'misseffect.blp')
+	end
+end
+
+-- Start DoT tracking
 
 local trackAuras = {}
 
 function trackAuras:Purge()
-	local _, ability, guid, expires
 	for _, ability in next, abilities.trackAuras do
 		for guid, aura in next, ability.aura_targets do
 			if aura.expires <= Player.time then
@@ -697,7 +877,6 @@ function trackAuras:Purge()
 end
 
 function trackAuras:Remove(guid)
-	local _, ability
 	for _, ability in next, abilities.trackAuras do
 		ability:RemoveAura(guid)
 	end
@@ -731,7 +910,6 @@ function Ability:RefreshAura(guid)
 end
 
 function Ability:RefreshAuraAll()
-	local guid, aura, remains
 	local duration = self:Duration()
 	for guid, aura in next, self.aura_targets do
 		aura.expires = Player.time + min(duration * 1.3, (aura.expires - Player.time) + duration)
@@ -744,7 +922,7 @@ function Ability:RemoveAura(guid)
 	end
 end
 
--- end DoT tracking
+-- End DoT tracking
 
 -- Hunter Abilities
 ---- Multiple Specializations
@@ -1003,7 +1181,7 @@ end
 function InventoryItem:Charges()
 	local charges = GetItemCount(self.itemId, false, true) or 0
 	if self.created_by and (self.created_by:Previous() or Player.previous_gcd[1] == self.created_by) then
-		charges = max(charges, self.max_charges)
+		charges = max(self.max_charges, charges)
 	end
 	return charges
 end
@@ -1011,7 +1189,7 @@ end
 function InventoryItem:Count()
 	local count = GetItemCount(self.itemId, false, false) or 0
 	if self.created_by and (self.created_by:Previous() or Player.previous_gcd[1] == self.created_by) then
-		count = max(count, 1)
+		count = max(1, count)
 	end
 	return count
 end
@@ -1056,48 +1234,70 @@ PotionOfUnbridledFury.buff.triggers_gcd = false
 -- Equipment
 local Trinket1 = InventoryItem:Add(0)
 local Trinket2 = InventoryItem:Add(0)
+Trinket.BottledFlayedwingToxin = InventoryItem:Add(178742)
+Trinket.BottledFlayedwingToxin.buff = Ability:Add(345545, true, true)
 -- End Inventory Items
 
 -- Start Player API
 
 function Player:Health()
-	return self.health
+	return self.health.current
 end
 
 function Player:HealthMax()
-	return self.health_max
+	return self.health.max
 end
 
 function Player:HealthPct()
-	return self.health / self.health_max * 100
+	return self.health.current / self.health.max * 100
 end
 
 function Player:Focus()
-	return self.focus
+	return self.focus.current
 end
 
 function Player:FocusDeficit()
-	return self.focus_max - self.focus
+	return self.focus.max - self.focus.current
 end
 
 function Player:FocusRegen()
-	return self.focus_regen
+	return self.focus.regen
 end
 
 function Player:FocusMax()
-	return self.focus_max
+	return self.focus.max
 end
 
 function Player:FocusTimeToMax()
-	local deficit = self.focus_max - self.focus
+	local deficit = self.focus.max - self.focus.current
 	if deficit <= 0 then
 		return 0
 	end
-	return deficit / self.focus_regen
+	return deficit / self.focus.regen
 end
 
 function Player:HasteFactor()
 	return self.haste_factor
+end
+
+function Player:ResetSwing(mainHand, offHand, missed)
+	local mh, oh = UnitAttackSpeed('player')
+	if mainHand then
+		self.swing.mh.speed = (mh or 0)
+		self.swing.mh.last = self.time
+		self.swing.mh.next = self.time + self.swing.mh.speed
+		if Opt.swing_timer then
+			ghPanel.text.tl:SetTextColor(1, missed and 0 or 1, missed and 0 or 1, 1)
+		end
+	end
+	if offHand then
+		self.swing.oh.speed = (oh or 0)
+		self.swing.oh.last = self.time
+		self.swing.oh.next = self.time + self.swing.oh.speed
+		if Opt.swing_timer then
+			ghPanel.text.tr:SetTextColor(1, missed and 0 or 1, missed and 0 or 1, 1)
+		end
+	end
 end
 
 function Player:TimeInCombat()
@@ -1107,8 +1307,16 @@ function Player:TimeInCombat()
 	return 0
 end
 
+function Player:UnderMeleeAttack()
+	return (self.time - self.swing.last_taken) < 3
+end
+
+function Player:UnderAttack()
+	return self.threat.status >= 3 or self:UnderMeleeAttack()
+end
+
 function Player:BloodlustActive()
-	local _, i, id
+	local _, id
 	for i = 1, 40 do
 		_, _, _, _, _, _, _, _, _, id = UnitAura('player', i, 'HELPFUL')
 		if not id then
@@ -1134,7 +1342,6 @@ function Player:Equipped(itemID, slot)
 	if slot then
 		return GetInventoryItemID('player', slot) == itemID, slot
 	end
-	local i
 	for i = 1, 19 do
 		if GetInventoryItemID('player', i) == itemID then
 			return true, i
@@ -1144,7 +1351,7 @@ function Player:Equipped(itemID, slot)
 end
 
 function Player:BonusIdEquipped(bonusId)
-	local i, id, link, item
+	local link, item
 	for i = 1, 19 do
 		link = GetInventoryItemLink('player', i)
 		if link then
@@ -1165,10 +1372,18 @@ function Player:InArenaOrBattleground()
 	return self.instance == 'arena' or self.instance == 'pvp'
 end
 
-function Player:UpdateAbilities()
-	self.focus_max = UnitPowerMax('player', 2)
+function Player:UpdateTime(timeStamp)
+	self.ctime = GetTime()
+	if timeStamp then
+		self.time_diff = self.ctime - timeStamp
+	end
+	self.time = self.ctime - self.time_diff
+end
 
-	local _, ability, spellId, node
+function Player:UpdateAbilities()
+	self.focus.max = UnitPowerMax('player', 2)
+
+	local node
 
 	for _, ability in next, abilities.all do
 		ability.known = false
@@ -1227,10 +1442,10 @@ function Player:UpdateAbilities()
 		FlayersMark.known = true
 	end
 
-	abilities.bySpellId = {}
-	abilities.velocity = {}
-	abilities.autoAoe = {}
-	abilities.trackAuras = {}
+	wipe(abilities.bySpellId)
+	wipe(abilities.velocity)
+	wipe(abilities.autoAoe)
+	wipe(abilities.trackAuras)
 	for _, ability in next, abilities.all do
 		if ability.known then
 			abilities.bySpellId[ability.spellId] = ability
@@ -1250,26 +1465,105 @@ function Player:UpdateAbilities()
 	end
 end
 
+function Player:UpdateThreat()
+	local _, status, pct
+	_, status, pct = UnitDetailedThreatSituation('player', 'target')
+	self.threat.status = status or 0
+	self.threat.pct = pct or 0
+	self.threat.lead = 0
+	if self.threat.status >= 3 and DETAILS_PLUGIN_TINY_THREAT then
+		local threat_table = DETAILS_PLUGIN_TINY_THREAT.player_list_indexes
+		if threat_table and threat_table[1] and threat_table[2] and threat_table[1][1] == Player.name then
+			self.threat.lead = max(0, threat_table[1][6] - threat_table[2][6])
+		end
+	end
+end
+
 function Player:UpdatePet()
-	self.pet = UnitGUID('pet')
-	self.pet_alive = self.pet and not UnitIsDead('pet') and true
-	self.pet_active = (self.pet_alive and not self.pet_stuck or IsFlying()) and true
+	self.pet.guid = UnitGUID('pet')
+	self.pet.alive = self.pet.guid and not UnitIsDead('pet') and true
+	self.pet.active = (self.pet.alive and not self.pet.stuck or IsFlying()) and true
+end
+
+function Player:Update()
+	local _, start, duration, remains, spellId, speed, max_speed
+	self.main =  nil
+	self.cd = nil
+	self.interrupt = nil
+	self.extra = nil
+	self.wait_time = nil
+	self:UpdateTime()
+	start, duration = GetSpellCooldown(61304)
+	self.gcd_remains = start > 0 and duration - (self.ctime - start) or 0
+	_, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
+	self.ability_casting = abilities.bySpellId[spellId]
+	self.cast_remains = remains and (remains / 1000 - self.ctime) or 0
+	self.execute_remains = max(self.cast_remains, self.gcd_remains)
+	self.haste_factor = 1 / (1 + UnitSpellHaste('player') / 100)
+	self.gcd = 1.5 * self.haste_factor
+	self.health.current = UnitHealth('player')
+	self.health.max = UnitHealthMax('player')
+	self.focus.regen = GetPowerRegen()
+	self.focus.current = UnitPower('player', 2) + (self.focus.regen * self.execute_remains)
+	if self.ability_casting then
+		self.focus.current = self.focus.current - self.ability_casting:Cost()
+	end
+	self.focus.current = max(0, min(self.focus.max, self.focus.current))
+	self.swing.mh.remains = max(0, self.swing.mh.next - self.time - self.execute_remains)
+	self.swing.oh.remains = max(0, self.swing.oh.next - self.time - self.execute_remains)
+	speed, max_speed = GetUnitSpeed('player')
+	self.moving = speed ~= 0
+	self.movement_speed = max_speed / 7 * 100
+	self:UpdateThreat()
+	self:UpdatePet()
+
+	trackAuras:Purge()
+	if Opt.auto_aoe then
+		for _, ability in next, abilities.autoAoe do
+			ability:UpdateTargetsHit()
+		end
+		autoAoe:Purge()
+	end
+end
+
+function Player:Init()
+	local _
+	if #UI.glows == 0 then
+		UI:CreateOverlayGlows()
+		UI:HookResourceFrame()
+	end
+	ghPreviousPanel.ability = nil
+	self.guid = UnitGUID('player')
+	self.name = UnitName('player')
+	self.level = UnitLevel('player')
+	_, self.instance = IsInInstance()
+	events:PLAYER_SPECIALIZATION_CHANGED('player')
 end
 
 -- End Player API
 
 -- Start Target API
 
-function Target:UpdateHealth()
+function Target:UpdateHealth(reset)
 	timer.health = 0
-	self.health = UnitHealth('target')
-	self.health_max = UnitHealthMax('target')
-	table.remove(self.health_array, 1)
-	self.health_array[25] = self.health
-	self.timeToDieMax = self.health / Player.health_max * 15
-	self.healthPercentage = self.health_max > 0 and (self.health / self.health_max * 100) or 100
-	self.healthLostPerSec = (self.health_array[1] - self.health) / 5
-	self.timeToDie = self.healthLostPerSec > 0 and min(self.timeToDieMax, self.health / self.healthLostPerSec) or self.timeToDieMax
+	self.health.current = UnitHealth('target')
+	self.health.max = UnitHealthMax('target')
+	if self.health.current <= 0 then
+		self.health.current = Player.health.max
+		self.health.max = self.health.current
+	end
+	if reset then
+		for i = 1, 25 do
+			self.health.history[i] = self.health.current
+		end
+	else
+		table.remove(self.health.history, 1)
+		self.health.history[25] = self.health.current
+	end
+	self.timeToDieMax = self.health.current / Player.health.max * 10
+	self.health.pct = self.health.max > 0 and (self.health.current / self.health.max * 100) or 100
+	self.health.loss_per_sec = (self.health.history[1] - self.health.current) / 5
+	self.timeToDie = self.health.loss_per_sec > 0 and min(self.timeToDieMax, self.health.current / self.health.loss_per_sec) or self.timeToDieMax
 end
 
 function Target:Update()
@@ -1284,13 +1578,9 @@ function Target:Update()
 		self.stunnable = true
 		self.classification = 'normal'
 		self.player = false
-		self.level = UnitLevel('player')
-		self.hostile = true
-		local i
-		for i = 1, 25 do
-			self.health_array[i] = 0
-		end
-		self:UpdateHealth()
+		self.level = Player.level
+		self.hostile = false
+		self:UpdateHealth(true)
 		if Opt.always_on then
 			UI:UpdateCombat()
 			ghPanel:Show()
@@ -1303,10 +1593,7 @@ function Target:Update()
 	end
 	if guid ~= self.guid then
 		self.guid = guid
-		local i
-		for i = 1, 25 do
-			self.health_array[i] = UnitHealth('target')
-		end
+		self:UpdateHealth(true)
 	end
 	self.boss = false
 	self.stunnable = true
@@ -1314,12 +1601,11 @@ function Target:Update()
 	self.player = UnitIsPlayer('target')
 	self.level = UnitLevel('target')
 	self.hostile = UnitCanAttack('player', 'target') and not UnitIsDead('target')
-	self:UpdateHealth()
 	if not self.player and self.classification ~= 'minus' and self.classification ~= 'normal' then
-		if self.level == -1 or (Player.instance == 'party' and self.level >= UnitLevel('player') + 3) then
+		if self.level == -1 or (Player.instance == 'party' and self.level >= Player.level + 2) then
 			self.boss = true
 			self.stunnable = false
-		elseif Player.instance == 'raid' or (self.health_max > Player.health_max * 10) then
+		elseif Player.instance == 'raid' or (self.health.max > Player.health.max * 10) then
 			self.stunnable = false
 		end
 	end
@@ -1330,13 +1616,32 @@ function Target:Update()
 	end
 end
 
+function Target:Stunned()
+	if Intimidation:Up() then
+		return true
+	end
+	return false
+end
+
 -- End Target API
 
 -- Start Ability Modifications
 
+function Harpoon:CastLanded(dstGUID, event)
+	Ability.CastLanded(self, dstGUID, event)
+	Target.estimated_range = 5
+end
+
+function SerpentSting:CastLanded(dstGUID, event)
+	Ability.CastLanded(self, dstGUID, event)
+	if event == 'SPELL_AURA_APPLIED' and self.aura_targets[dstGUID] then
+		self:RefreshAura(dstGUID)
+	end
+end
+
 function SerpentSting:Remains()
 	local remains = Ability.Remains(self)
-	if VolatileBomb.known and VolatileBomb:Traveling() and remains > 0 then
+	if VolatileBomb.known and VolatileBomb:Traveling() > 0 and remains > 0 then
 		return self:Duration()
 	end
 	return remains
@@ -1350,7 +1655,7 @@ function SerpentSting:Cost()
 end
 
 function KillShot:Usable()
-	if (not FlayersMark.known or FlayersMark:Down()) and Target.healthPercentage >= 20 then
+	if (not FlayersMark.known or FlayersMark:Down()) and Target.health.pct >= 20 then
 		return false
 	end
 	return Ability.Usable(self)
@@ -1382,7 +1687,7 @@ function WildfireInfusion:Update()
 end
 
 function CallPet:Usable()
-	if Player.pet_active then
+	if Player.pet.active then
 		return false
 	end
 	return Ability.Usable(self)
@@ -1409,7 +1714,7 @@ function RevivePet:Usable()
 end
 
 function PetFrenzy:StartDurationStack()
-	local _, i, id, duration, expires, stack
+	local _, id, duration, expires, stack
 	for i = 1, 40 do
 		_, _, stack, _, duration, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
 		if not id then
@@ -1422,7 +1727,7 @@ function PetFrenzy:StartDurationStack()
 end
 
 function WildSpirits:Remains()
-	return min(max(self.buff_duration - (Player.time - self.last_used), 0), self.buff_duration)
+	return max(0, min(self.buff_duration, self.buff_duration - (Player.time - self.last_used)))
 end
 
 -- End Ability Modifications
@@ -1463,7 +1768,7 @@ APL[SPEC.BEASTMASTERY].main = function(self)
 	elseif MendPet:Usable() then
 		UseExtra(MendPet)
 	end
-	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(Player.enemies - 1, 6)) or AspectOfTheWild:Up() or (WildSpirits.known and WildSpirits:Up())
+	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or AspectOfTheWild:Up() or (WildSpirits.known and WildSpirits:Up())
 	if Player:TimeInCombat() == 0 then
 --[[
 actions.precombat=flask
@@ -1518,7 +1823,7 @@ actions.cds+=/potion,if=buff.bestial_wrath.up&buff.aspect_of_the_wild.up&(target
 			return UseCooldown(Trinket2)
 		end
 	end
-	if Opt.pot and Target.boss and SuperiorBattlePotionOfAgility:Usable() and (BestialWrath:Up() and AspectOfTheWild:Up() and (Target.healthPercentage < 35 or not KillerInstinct.known) or Target.timeToDie < 25) then
+	if Opt.pot and Target.boss and SuperiorBattlePotionOfAgility:Usable() and (BestialWrath:Up() and AspectOfTheWild:Up() and (Target.health.pct < 35 or not KillerInstinct.known) or Target.timeToDie < 25) then
 		return UseCooldown(SuperiorBattlePotionOfAgility)
 	end
 	if WildSpirits:Usable() and WildSpirits:Down() then
@@ -1675,6 +1980,9 @@ APL[SPEC.SURVIVAL].main = function(self)
 		UseExtra(MendPet)
 	end
 	if Player:TimeInCombat() == 0 then
+		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
+			UseCooldown(Trinket.BottledFlayedwingToxin)
+		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
 			if GreaterFlaskOfTheCurrents:Usable() and GreaterFlaskOfTheCurrents.buff:Remains() < 300 then
 				UseCooldown(GreaterFlaskOfTheCurrents)
@@ -1686,6 +1994,9 @@ APL[SPEC.SURVIVAL].main = function(self)
 		if Harpoon:Usable() then
 			UseCooldown(Harpoon)
 		end
+	end
+	if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Down() and Trinket.BottledFlayedwingToxin:Usable() then
+		UseCooldown(Trinket.BottledFlayedwingToxin)
 	end
 --[[
 actions=auto_attack
@@ -1702,7 +2013,7 @@ actions+=/call_action_list,name=cleave,if=active_enemies>1&!talent.birds_of_prey
 actions+=/arcane_torrent
 actions+=/bag_of_tricks
 ]]
-	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(Player.enemies - 1, 6)) or CoordinatedAssault:Up() or (WildSpirits.known and WildSpirits:Up())
+	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or CoordinatedAssault:Up() or (WildSpirits.known and WildSpirits:Up())
 	if Player.use_cds then
 		self:cds()
 	end
@@ -1934,7 +2245,7 @@ actions.wfi+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.ticking|n
 	if KillShot:Usable() then
 		return KillShot
 	end
-	if KillCommand:Usable() and KillCommand:WontCapFocus(Player.focus_regen) then
+	if KillCommand:Usable() and KillCommand:WontCapFocus(Player:FocusRegen()) then
 		return KillCommand
 	end
 	if AMurderOfCrows:Usable() then
@@ -2082,7 +2393,7 @@ actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&buff.tip_of_
 actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison.stack
 actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
 ]]
-	local carve_cdr = min(Player.enemies, 5)
+	local carve_cdr = min(5, Player.enemies)
 	if LatentPoisonInjectors.known and MongooseBite:Usable() and LatentPoisonInjectors:Stack() > 9 and Target.timeToDie < (Player.enemies * Player.gcd) then
 		return MongooseBite
 	end
@@ -2178,7 +2489,7 @@ end
 hooksecurefunc('ActionButton_ShowOverlayGlow', UI.DenyOverlayGlow) -- Disable Blizzard's built-in action button glowing
 
 function UI:UpdateGlowColorAndScale()
-	local w, h, glow, i
+	local w, h, glow
 	local r = Opt.glow.color.r
 	local g = Opt.glow.color.g
 	local b = Opt.glow.color.b
@@ -2198,7 +2509,6 @@ function UI:UpdateGlowColorAndScale()
 end
 
 function UI:CreateOverlayGlows()
-	local b, i
 	local GenerateGlow = function(button)
 		if button then
 			local glow = CreateFrame('Frame', nil, button, 'ActionBarButtonSpellActivationAlert')
@@ -2247,7 +2557,7 @@ function UI:CreateOverlayGlows()
 end
 
 function UI:UpdateGlows()
-	local glow, icon, i
+	local glow, icon
 	for i = 1, #self.glows do
 		glow = self.glows[i]
 		icon = glow.button.icon:GetTexture()
@@ -2403,11 +2713,15 @@ end
 
 function UI:UpdateDisplay()
 	timer.display = 0
-	local dim, text_center
+	local dim, dim_cd, text_center, text_cd
+
 	if Opt.dimmer then
 		dim = not ((not Player.main) or
 		           (Player.main.spellId and IsUsableSpell(Player.main.spellId)) or
 		           (Player.main.itemId and IsUsableItem(Player.main.itemId)))
+		dim_cd = not ((not Player.cd) or
+		           (Player.cd.spellId and IsUsableSpell(Player.cd.spellId)) or
+		           (Player.cd.itemId and IsUsableItem(Player.cd.itemId)))
 	end
 	if Player.wait_time then
 		local deficit = Player.wait_time - GetTime()
@@ -2416,49 +2730,30 @@ function UI:UpdateDisplay()
 			dim = Opt.dimmer
 		end
 	end
+	if Player.main and Player.main.requires_react then
+		local react = Player.main:React()
+		if react > 0 then
+			text_center = format('%.1f', react)
+		end
+	end
+	if Player.cd and Player.cd.requires_react then
+		local react = Player.cd:React()
+		if react > 0 then
+			text_cd = format('%.1f', react)
+		end
+	end
+
 	ghPanel.dimmer:SetShown(dim)
 	ghPanel.text.center:SetText(text_center)
 	--ghPanel.text.bl:SetText(format('%.1fs', Target.timeToDie))
+	ghCooldownPanel.text:SetText(text_cd)
+	ghCooldownPanel.dimmer:SetShown(dim_cd)
 end
 
 function UI:UpdateCombat()
 	timer.combat = 0
-	local _, start, duration, remains, spellId, speed, max_speed
-	Player.ctime = GetTime()
-	Player.time = Player.ctime - Player.time_diff
-	Player.main =  nil
-	Player.cd = nil
-	Player.interrupt = nil
-	Player.extra = nil
-	Player.wait_time = nil
-	start, duration = GetSpellCooldown(61304)
-	Player.gcd_remains = start > 0 and duration - (Player.ctime - start) or 0
-	_, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
-	Player.ability_casting = abilities.bySpellId[spellId]
-	Player.execute_remains = max(remains and (remains / 1000 - Player.ctime) or 0, Player.gcd_remains)
-	Player.haste_factor = 1 / (1 + UnitSpellHaste('player') / 100)
-	Player.gcd = 1.5 * Player.haste_factor
-	Player.health = UnitHealth('player')
-	Player.health_max = UnitHealthMax('player')
-	Player.focus_regen = GetPowerRegen()
-	Player.focus = UnitPower('player', 2) + (Player.focus_regen * Player.execute_remains)
-	if Player.ability_casting then
-		Player.focus = Player.focus - Player.ability_casting:Cost()
-	end
-	Player.focus = min(max(Player.focus, 0), Player.focus_max)
-	speed, max_speed = GetUnitSpeed('player')
-	Player.moving = speed ~= 0
-	Player.movement_speed = max_speed / 7 * 100
-	Player:UpdatePet()
-
-	trackAuras:Purge()
-	if Opt.auto_aoe then
-		local ability
-		for _, ability in next, abilities.autoAoe do
-			ability:UpdateTargetsHit()
-		end
-		autoAoe:Purge()
-	end
+	
+	Player:Update()
 
 	Player.main = APL[Player.spec]:main()
 	if Player.main then
@@ -2466,6 +2761,10 @@ function UI:UpdateCombat()
 	end
 	if Player.cd then
 		ghCooldownPanel.icon:SetTexture(Player.cd.icon)
+		if Player.cd.spellId then
+			local start, duration = GetSpellCooldown(Player.cd.spellId)
+			ghCooldownPanel.swipe:SetCooldown(start, duration)
+		end
 	end
 	if Player.extra then
 		ghExtraPanel.icon:SetTexture(Player.extra.icon)
@@ -2478,7 +2777,7 @@ function UI:UpdateCombat()
 		end
 		if start and not notInterruptible then
 			Player.interrupt = APL.Interrupt()
-			ghInterruptPanel.cast:SetCooldown(start / 1000, (ends - start) / 1000)
+			ghInterruptPanel.swipe:SetCooldown(start / 1000, (ends - start) / 1000)
 		end
 		if Player.interrupt then
 			ghInterruptPanel.icon:SetTexture(Player.interrupt.icon)
@@ -2487,6 +2786,13 @@ function UI:UpdateCombat()
 		ghInterruptPanel.border:SetShown(Player.interrupt)
 		ghInterruptPanel:SetShown(start and not notInterruptible)
 	end
+	if Opt.previous and ghPreviousPanel.ability then
+		if (Player.time - ghPreviousPanel.ability.last_used) > 10 then
+			ghPreviousPanel.ability = nil
+			ghPreviousPanel:Hide()
+		end
+	end
+
 	ghPanel.icon:SetShown(Player.main)
 	ghPanel.border:SetShown(Player.main)
 	ghCooldownPanel:SetShown(Player.cd)
@@ -2537,130 +2843,128 @@ function events:ADDON_LOADED(name)
 	end
 end
 
-function events:COMBAT_LOG_EVENT_UNFILTERED()
-	local timeStamp, eventType, _, srcGUID, _, _, _, dstGUID, _, _, _, spellId, spellName, _, missType = CombatLogGetCurrentEventInfo()
-	Player.time = timeStamp
-	Player.ctime = GetTime()
-	Player.time_diff = Player.ctime - Player.time
-
-	if eventType == 'UNIT_DIED' or eventType == 'UNIT_DESTROYED' or eventType == 'UNIT_DISSIPATES' or eventType == 'SPELL_INSTAKILL' or eventType == 'PARTY_KILL' then
-		trackAuras:Remove(dstGUID)
-		if Opt.auto_aoe then
-			autoAoe:Remove(dstGUID)
-		end
+CombatEvent.TRIGGER = function(timeStamp, event, _, srcGUID, _, _, _, dstGUID, _, _, _, ...)
+	Player:UpdateTime(timeStamp)
+	local e = event
+	if (
+	   e == 'UNIT_DESTROYED' or
+	   e == 'UNIT_DISSIPATES' or
+	   e == 'SPELL_INSTAKILL' or
+	   e == 'PARTY_KILL')
+	then
+		e = 'UNIT_DIED'
+	elseif (
+	   e == 'RANGE_DAMAGE' or
+	   e == 'SPELL_CAST_START' or
+	   e == 'SPELL_CAST_SUCCESS' or
+	   e == 'SPELL_CAST_FAILED' or
+	   e == 'SPELL_AURA_REMOVED' or
+	   e == 'SPELL_DAMAGE' or
+	   e == 'SPELL_PERIODIC_DAMAGE' or
+	   e == 'SPELL_MISSED' or
+	   e == 'SPELL_AURA_APPLIED' or
+	   e == 'SPELL_AURA_REFRESH' or
+	   e == 'SPELL_AURA_REMOVED')
+	then
+		e = 'SPELL'
 	end
-	if Opt.auto_aoe and (eventType == 'SWING_DAMAGE' or eventType == 'SWING_MISSED') then
-		if dstGUID == Player.guid or dstGUID == Player.pet then
-			autoAoe:Add(srcGUID, true)
-		elseif (srcGUID == Player.guid or srcGUID == Player.pet) and not (missType == 'EVADE' or missType == 'IMMUNE') then
+	if CombatEvent[e] then
+		return CombatEvent[e](event, srcGUID, dstGUID, ...)
+	end
+end
+
+CombatEvent.UNIT_DIED = function(event, srcGUID, dstGUID)
+	trackAuras:Remove(dstGUID)
+	if Opt.auto_aoe then
+		autoAoe:Remove(dstGUID)
+	end
+end
+
+CombatEvent.SWING_DAMAGE = function(event, srcGUID, dstGUID, amount, overkill, spellSchool, resisted, blocked, absorbed, critical, glancing, crushing, offHand)
+	if srcGUID == Player.guid then
+		Player:ResetSwing(not offHand, offHand)
+		if Opt.auto_aoe then
 			autoAoe:Add(dstGUID, true)
 		end
+	elseif dstGUID == Player.guid then
+		Player.swing.last_taken = Player.time
+		if Opt.auto_aoe then
+			autoAoe:Add(srcGUID, true)
+		end
 	end
+end
 
-	if (srcGUID ~= Player.guid and srcGUID ~= Player.pet) then
+CombatEvent.SWING_MISSED = function(event, srcGUID, dstGUID, missType, offHand, amountMissed)
+	if srcGUID == Player.guid then
+		Player:ResetSwing(not offHand, offHand, true)
+		if Opt.auto_aoe and not (missType == 'EVADE' or missType == 'IMMUNE') then
+			autoAoe:Add(dstGUID, true)
+		end
+	elseif dstGUID == Player.guid then
+		Player.swing.last_taken = Player.time
+		if Opt.auto_aoe then
+			autoAoe:Add(srcGUID, true)
+		end
+	end
+end
+
+CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellSchool, missType)
+	if not (srcGUID == Player.guid or srcGUID == Player.pet.guid) then
 		return
 	end
 
-	if srcGUID == Player.pet then
-		if Player.pet_stuck and (eventType == 'SPELL_CAST_SUCCESS' or eventType == 'SPELL_DAMAGE' or eventType == 'SWING_DAMAGE') then
-			Player.pet_stuck = false
-		elseif not Player.pet_stuck and eventType == 'SPELL_CAST_FAILED' and missType == 'No path available' then
-			Player.pet_stuck = true
+	if srcGUID == Player.pet.guid then
+		if Player.pet.stuck and (event == 'SPELL_CAST_SUCCESS' or event == 'SPELL_DAMAGE' or event == 'SWING_DAMAGE') then
+			Player.pet.stuck = false
+		elseif not Player.pet.stuck and event == 'SPELL_CAST_FAILED' and missType == 'No path available' then
+			Player.pet.stuck = true
 		end
 	end
 
 	local ability = spellId and abilities.bySpellId[spellId]
 	if not ability then
-		--print(format('EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d', eventType, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0))
-		return
-	end
-
-	if not (
-	   eventType == 'SPELL_CAST_START' or
-	   eventType == 'SPELL_CAST_SUCCESS' or
-	   eventType == 'SPELL_CAST_FAILED' or
-	   eventType == 'SPELL_DAMAGE' or
-	   eventType == 'SPELL_ABSORBED' or
-	   eventType == 'SPELL_PERIODIC_DAMAGE' or
-	   eventType == 'SPELL_MISSED' or
-	   eventType == 'SPELL_AURA_APPLIED' or
-	   eventType == 'SPELL_AURA_REFRESH' or
-	   eventType == 'SPELL_AURA_REMOVED')
-	then
+		--print(format('EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d', event, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0))
 		return
 	end
 
 	UI:UpdateCombatWithin(0.05)
-	if eventType == 'SPELL_CAST_SUCCESS' then
-		if srcGUID == Player.guid or ability.player_triggered then
-			Player.last_ability = ability
-			ability.last_used = Player.time
-			if ability.triggers_gcd then
-				Player.previous_gcd[10] = nil
-				table.insert(Player.previous_gcd, 1, ability)
-			end
-			if ability.travel_start then
-				ability.travel_start[dstGUID] = Player.time
-				if not ability.range_est_start then
-					ability.range_est_start = Player.time
-				end
-			end
-			if Opt.previous and ghPanel:IsVisible() then
-				ghPreviousPanel.ability = ability
-				ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
-				ghPreviousPanel.icon:SetTexture(ability.icon)
-				ghPreviousPanel:Show()
-			end
-		end
-		if Player.pet_stuck and ability.requires_pet then
-			Player.pet_stuck = false
-		end
+	if event == 'SPELL_CAST_SUCCESS' then
+		ability:CastSuccess(dstGUID)
+		return
+	elseif event == 'SPELL_CAST_START' then
+		ability:CastStart(dstGUID)
+		return
+	elseif event == 'SPELL_CAST_FAILED' then
+		ability:CastFailed(dstGUID, missType)
 		return
 	end
-	if eventType == 'SPELL_CAST_FAILED' then
-		if ability.requires_pet and missType == 'No path available' then
-			Player.pet_stuck = true
-		end
-		return
-	end
-	if dstGUID == Player.guid or dstGUID == Player.pet then
+
+	if dstGUID == Player.guid or dstGUID == Player.pet.guid then
 		return -- ignore buffs beyond here
 	end
 	if ability.aura_targets then
-		if eventType == 'SPELL_AURA_APPLIED' then
+		if event == 'SPELL_AURA_APPLIED' then
 			ability:ApplyAura(dstGUID)
-		elseif eventType == 'SPELL_AURA_REFRESH' then
+		elseif event == 'SPELL_AURA_REFRESH' then
 			ability:RefreshAura(dstGUID)
-		elseif eventType == 'SPELL_AURA_REMOVED' then
+		elseif event == 'SPELL_AURA_REMOVED' then
 			ability:RemoveAura(dstGUID)
 		end
 	end
 	if Opt.auto_aoe then
-		if eventType == 'SPELL_MISSED' and (missType == 'EVADE' or missType == 'IMMUNE') then
+		if event == 'SPELL_MISSED' and (missType == 'EVADE' or missType == 'IMMUNE') then
 			autoAoe:Remove(dstGUID)
-		elseif ability.auto_aoe and (eventType == ability.auto_aoe.trigger or ability.auto_aoe.trigger == 'SPELL_AURA_APPLIED' and eventType == 'SPELL_AURA_REFRESH') then
+		elseif ability.auto_aoe and (event == ability.auto_aoe.trigger or ability.auto_aoe.trigger == 'SPELL_AURA_APPLIED' and event == 'SPELL_AURA_REFRESH') then
 			ability:RecordTargetHit(dstGUID)
 		end
 	end
-	if eventType == 'SPELL_ABSORBED' or eventType == 'SPELL_MISSED' or eventType == 'SPELL_DAMAGE' or eventType == 'SPELL_AURA_APPLIED' or eventType == 'SPELL_AURA_REFRESH' then
-		if ability == VolatileBomb and eventType == 'SPELL_AURA_APPLIED' and SerpentSting.aura_targets[dstGUID] then
-			SerpentSting:RefreshAura(dstGUID)
-		end
-		if ability.travel_start and ability.travel_start[dstGUID] then
-			ability.travel_start[dstGUID] = nil
-		end
-		if ability == Harpoon then
-			Target.estimated_range = 5
-		elseif ability.range_est_start then
-			Target.estimated_range = floor(max(5, min(ability.max_range, ability.velocity * (Player.time - ability.range_est_start))))
-			ability.range_est_start = nil
-		elseif ability.max_range < Target.estimated_range then
-			Target.estimated_range = ability.max_range
-		end
-		if Opt.previous and Opt.miss_effect and eventType == 'SPELL_MISSED' and ghPanel:IsVisible() and ability == ghPreviousPanel.ability then
-			ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'misseffect.blp')
-		end
+	if event == 'RANGE_DAMAGE' or event == 'SPELL_DAMAGE' or event == 'SPELL_ABSORBED' or event == 'SPELL_MISSED' or event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
+		ability:CastLanded(dstGUID, event)
 	end
+end
+
+function events:COMBAT_LOG_EVENT_UNFILTERED()
+	CombatEvent.TRIGGER(CombatLogGetCurrentEventInfo())
 end
 
 function events:PLAYER_TARGET_CHANGED()
@@ -2679,24 +2983,50 @@ function events:UNIT_FLAGS(unitID)
 	end
 end
 
+function events:UNIT_SPELLCAST_START(unitID, castGUID, spellId)
+	if Opt.interrupt and unitID == 'target' then
+		UI:UpdateCombatWithin(0.05)
+	end
+end
+
+function events:UNIT_SPELLCAST_STOP(unitID, castGUID, spellId)
+	if Opt.interrupt and unitID == 'target' then
+		UI:UpdateCombatWithin(0.05)
+	end
+end
+events.UNIT_SPELLCAST_FAILED = events.UNIT_SPELLCAST_STOP
+events.UNIT_SPELLCAST_INTERRUPTED = events.UNIT_SPELLCAST_STOP
+
+function events:UNIT_SPELLCAST_SUCCEEDED(unitID, castGUID, spellId)
+	if unitID ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
+		return
+	end
+	local ability = abilities.bySpellId[spellId]
+	if not ability then
+		return
+	end
+	if ability.traveling then
+		ability.next_castGUID = castGUID
+	end
+end
+
 function events:PLAYER_REGEN_DISABLED()
 	Player.combat_start = GetTime() - Player.time_diff
 end
 
 function events:PLAYER_REGEN_ENABLED()
 	Player.combat_start = 0
-	Player.last_swing_taken = 0
-	Player.pet_stuck = false
+	Player.swing.last_taken = 0
+	Player.pet.stuck = false
 	Target.estimated_range = 30
-	Player.previous_gcd = {}
+	wipe(Player.previous_gcd)
 	if Player.last_ability then
 		Player.last_ability = nil
 		ghPreviousPanel:Hide()
 	end
-	local _, ability, guid
 	for _, ability in next, abilities.velocity do
-		for guid in next, ability.travel_start do
-			ability.travel_start[guid] = nil
+		for guid in next, ability.traveling do
+			ability.traveling[guid] = nil
 		end
 	end
 	if Opt.auto_aoe then
@@ -2712,7 +3042,7 @@ function events:PLAYER_REGEN_ENABLED()
 end
 
 function events:PLAYER_EQUIPMENT_CHANGED()
-	local _, i, equipType, hasCooldown
+	local _, equipType, hasCooldown
 	Trinket1.itemId = GetInventoryItemID('player', 13) or 0
 	Trinket2.itemId = GetInventoryItemID('player', 14) or 0
 	for _, i in next, Trinket do -- use custom APL lines for these trinkets
@@ -2748,10 +3078,11 @@ function events:PLAYER_SPECIALIZATION_CHANGED(unitName)
 	Player.spec = GetSpecialization() or 0
 	ghPreviousPanel.ability = nil
 	Player:SetTargetMode(1)
-	Target:Update()
 	events:PLAYER_EQUIPMENT_CHANGED()
 	events:PLAYER_REGEN_ENABLED()
+	events:SPELL_UPDATE_ICON()
 	UI.OnResourceFrameShow()
+	Player:Update()
 end
 
 function events:SPELL_UPDATE_COOLDOWN()
@@ -2771,18 +3102,6 @@ end
 function events:SPELL_UPDATE_ICON()
 	if WildfireInfusion.known then
 		WildfireInfusion:Update()
-	end
-end
-
-function events:UNIT_SPELLCAST_START(srcName)
-	if Opt.interrupt and srcName == 'target' then
-		UI:UpdateCombatWithin(0.05)
-	end
-end
-
-function events:UNIT_SPELLCAST_STOP(srcName)
-	if Opt.interrupt and srcName == 'target' then
-		UI:UpdateCombatWithin(0.05)
 	end
 end
 
@@ -2812,19 +3131,14 @@ function events:UI_ERROR_MESSAGE(errorId)
 	    errorId == 396 or -- target out of pet range
 	    errorId == 400    -- no pet path to target
 	) then
-		Player.pet_stuck = true
+		Player.pet.stuck = true
 	end
 end
 
 function events:PLAYER_ENTERING_WORLD()
-	if #UI.glows == 0 then
-		UI:CreateOverlayGlows()
-		UI:HookResourceFrame()
-	end
-	local _
-	_, Player.instance = IsInInstance()
-	Player.guid = UnitGUID('player')
-	events:PLAYER_SPECIALIZATION_CHANGED('player')
+	Player:Init()
+	Target:Update()
+	C_Timer.After(5, function() events:PLAYER_EQUIPMENT_CHANGED() end)
 end
 
 ghPanel.button:SetScript('OnClick', function(self, button, down)
@@ -2855,7 +3169,6 @@ ghPanel:SetScript('OnUpdate', function(self, elapsed)
 end)
 
 ghPanel:SetScript('OnEvent', function(self, event, ...) events[event](self, ...) end)
-local event
 for event in next, events do
 	ghPanel:RegisterEvent(event)
 end
@@ -2960,7 +3273,7 @@ SlashCmdList[ADDON] = function(msg, editbox)
 	end
 	if msg[1] == 'alpha' then
 		if msg[2] then
-			Opt.alpha = max(min((tonumber(msg[2]) or 100), 100), 0) / 100
+			Opt.alpha = max(0, min(100, tonumber(msg[2]) or 100)) / 100
 			UI:UpdateAlpha()
 		end
 		return Status('Icon transparency', Opt.alpha * 100 .. '%')
@@ -3009,9 +3322,9 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		end
 		if msg[2] == 'color' then
 			if msg[5] then
-				Opt.glow.color.r = max(min(tonumber(msg[3]) or 0, 1), 0)
-				Opt.glow.color.g = max(min(tonumber(msg[4]) or 0, 1), 0)
-				Opt.glow.color.b = max(min(tonumber(msg[5]) or 0, 1), 0)
+				Opt.glow.color.r = max(0, min(1, tonumber(msg[3]) or 0))
+				Opt.glow.color.g = max(0, min(1, tonumber(msg[4]) or 0))
+				Opt.glow.color.b = max(0, min(1, tonumber(msg[5]) or 0))
 				UI:UpdateGlowColorAndScale()
 			end
 			return Status('Glow color', '|cFFFF0000' .. Opt.glow.color.r, '|cFF00FF00' .. Opt.glow.color.g, '|cFF0000FF' .. Opt.glow.color.b)
@@ -3139,7 +3452,6 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		return Status('Position has been reset to', 'default')
 	end
 	print(ADDON, '(version: |cFFFFD000' .. GetAddOnMetadata(ADDON, 'Version') .. '|r) - Commands:')
-	local _, cmd
 	for _, cmd in next, {
 		'locked |cFF00C000on|r/|cFFC00000off|r - lock the ' .. ADDON .. ' UI so that it can\'t be moved',
 		'snap |cFF00C000above|r/|cFF00C000below|r/|cFFC00000off|r - snap the ' .. ADDON .. ' UI to the Personal Resource Display',
