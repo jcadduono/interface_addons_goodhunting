@@ -186,8 +186,7 @@ local Player = {
 		last_taken = 0,
 	},
 	set_bonus = {
-		t28_2p = false,
-		t28_4p = false,
+		t28 = 0,
 	},
 	previous_gcd = {},-- list of previous GCD abilities
 	item_use_blacklist = { -- list of item IDs with on-use effects we should mark unusable
@@ -751,13 +750,14 @@ function Ability:AutoAoe(removeUnaffected, trigger)
 		remove = removeUnaffected,
 		targets = {},
 		target_count = 0,
+		trigger = 'SPELL_DAMAGE',
 	}
 	if trigger == 'periodic' then
 		self.auto_aoe.trigger = 'SPELL_PERIODIC_DAMAGE'
 	elseif trigger == 'apply' then
 		self.auto_aoe.trigger = 'SPELL_AURA_APPLIED'
-	else
-		self.auto_aoe.trigger = 'SPELL_DAMAGE'
+	elseif trigger == 'cast' then
+		self.auto_aoe.trigger = 'SPELL_CAST_SUCCESS'
 	end
 end
 
@@ -814,6 +814,9 @@ function Ability:CastSuccess(dstGUID)
 		end
 		self:RemoveAura(self.auraTarget == 'player' and Player.guid or dstGUID)
 	end
+	if Opt.auto_aoe and self.auto_aoe and self.auto_aoe.trigger == 'SPELL_CAST_SUCCESS' then
+		autoAoe:Add(dstGUID, true)
+	end
 	if self.requires_pet then
 		Player.pet.stuck = false
 	end
@@ -833,7 +836,7 @@ function Ability:CastSuccess(dstGUID)
 	end
 end
 
-function Ability:CastLanded(dstGUID, event)
+function Ability:CastLanded(dstGUID, event, missType)
 	if self.swing_queue then
 		Player:ResetSwing(true, false, event == 'SPELL_MISSED')
 	end
@@ -930,6 +933,9 @@ local CallPet = Ability:Add(883, false, true)
 local CounterShot = Ability:Add(147362, false, true)
 CounterShot.cooldown_duration = 24
 CounterShot.triggers_gcd = false
+local FreezingTrap = Ability:Add(187650, false, true, 3355)
+FreezingTrap.cooldown_duration = 25
+FreezingTrap.buff_duration = 60
 local KillShot = Ability:Add({320976, 53351}, false, true)
 KillShot.cooldown_duration = 10
 KillShot.focus_cost = 10
@@ -940,6 +946,9 @@ MendPet.requires_pet = true
 MendPet.auraTarget = 'pet'
 local RevivePet = Ability:Add(982, false, true)
 RevivePet.focus_cost = 10
+local TarTrap = Ability:Add(187698, false, true, 135299)
+TarTrap.cooldown_duration = 30
+TarTrap.buff_duration = 30
 ------ Procs
 
 ------ Talents
@@ -1044,6 +1053,7 @@ KillCommand.hasted_cooldown = true
 KillCommand.requires_charge = true
 KillCommand.requires_pet = true
 KillCommand.max_range = 50
+KillCommand:AutoAoe(false, 'cast')
 local Muzzle = Ability:Add(187707, false, true)
 Muzzle.cooldown_duration = 15
 Muzzle.max_range = 5
@@ -1057,8 +1067,8 @@ SerpentSting.buff_duration = 12
 SerpentSting.tick_interval = 3
 SerpentSting.hasted_ticks = true
 SerpentSting:SetVelocity(60)
+SerpentSting:AutoAoe(false, 'apply')
 SerpentSting:TrackAuras()
-SerpentSting:AutoAoe()
 local WildfireBomb = Ability:Add(259495, false, true, 269747)
 WildfireBomb.cooldown_duration = 18
 WildfireBomb.buff_duration = 6
@@ -1066,7 +1076,7 @@ WildfireBomb.tick_interval = 1
 WildfireBomb.hasted_cooldown = true
 WildfireBomb.requires_charge = true
 WildfireBomb:SetVelocity(30)
-WildfireBomb:AutoAoe(true)
+WildfireBomb:AutoAoe(false, 'apply')
 ------ Talents
 local AlphaPredator = Ability:Add(269737, false, true)
 local BirdsOfPrey = Ability:Add(260331, false, true)
@@ -1105,7 +1115,7 @@ PheromoneBomb.tick_interval = 1
 PheromoneBomb.hasted_cooldown = true
 PheromoneBomb.requires_charge = true
 PheromoneBomb:SetVelocity(30)
-PheromoneBomb:AutoAoe(true)
+PheromoneBomb:AutoAoe(false, 'apply')
 local Predator = Ability:Add(260249, true, true) -- Bloodseeker buff
 local ShrapnelBomb = Ability:Add(270335, false, true, 270339) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
 ShrapnelBomb.cooldown_duration = 18
@@ -1114,8 +1124,7 @@ ShrapnelBomb.tick_interval = 1
 ShrapnelBomb.hasted_cooldown = true
 ShrapnelBomb.requires_charge = true
 ShrapnelBomb:SetVelocity(30)
-ShrapnelBomb:AutoAoe()
-ShrapnelBomb:TrackAuras(true)
+ShrapnelBomb:AutoAoe(false, 'apply')
 local SteelTrap = Ability:Add(162488, false, true, 162487)
 SteelTrap.cooldown_duration = 30
 SteelTrap.buff_duration = 20
@@ -1134,26 +1143,41 @@ VolatileBomb.tick_interval = 1
 VolatileBomb.hasted_cooldown = true
 VolatileBomb.requires_charge = true
 VolatileBomb:SetVelocity(30)
-VolatileBomb:AutoAoe(true)
+VolatileBomb:AutoAoe(false, 'apply')
 local WildfireInfusion = Ability:Add(271014, false, true)
 ------ Procs
 
 -- Covenant abilities
-local WildSpirits = Ability:Add(328231, false, true) -- Night Fae
-WildSpirits.cooldown_duration = 120
-WildSpirits.buff_duration = 15
-local FlayedShot = Ability:Add(324149, false, true) -- Necrolord
+local DeathChakram = Ability:Add(325028, false, true) -- Necrolord
+DeathChakram.cooldown_duration = 45
+DeathChakram:AutoAoe()
+local FlayedShot = Ability:Add(324149, false, true) -- Venthyr
 FlayedShot.cooldown_duration = 30
-FlayedShot.buff_duration = 14
+FlayedShot.buff_duration = 18
 FlayedShot.tick_interval = 2
 local FlayersMark = Ability:Add(324156, true, true) -- triggered by Flayed Shot ticks
 FlayersMark.buff_duration = 12
+local ResonatingArrow = Ability:Add(308491, false, true, 308498) -- Kyrian
+ResonatingArrow.cooldown_duration = 60
+ResonatingArrow.buff_duration = 10
+ResonatingArrow:AutoAoe(false, 'apply')
+local WildSpirits = Ability:Add(328231, false, true) -- Night Fae
+WildSpirits.cooldown_duration = 120
+local WildMark = Ability:Add(328275, false, true) -- triggered by Wild Spirits
+WildMark.buff_duration = 15
+WildMark:AutoAoe(false, 'apply')
 -- Soulbind conduits
 
 -- Legendary effects
 local LatentPoisonInjectors = Ability:Add(336902, false, true, 336903)
 LatentPoisonInjectors.buff_duration = 15
 LatentPoisonInjectors.bonus_id = 7017
+local NesingwarysTrappingApparatus = Ability:Add(336743, true, true, 336744)
+NesingwarysTrappingApparatus.buff_duration = 5
+NesingwarysTrappingApparatus.bonus_id = 7004
+-- Tier effects
+local MadBombardier = Ability:Add(364490, true, true, 363805)
+MadBombardier.buff_duration = 20
 -- Racials
 
 -- Trinket Effects
@@ -1441,6 +1465,12 @@ function Player:UpdateAbilities()
 	if FlayedShot.known then
 		FlayersMark.known = true
 	end
+	if WildSpirits.known then
+		WildMark.known = true
+	end
+	if Player.spec == SPEC.SURVIVAL and Player.set_bonus.t28 >= 2 then
+		MadBombardier.known = true
+	end
 
 	wipe(abilities.bySpellId)
 	wipe(abilities.velocity)
@@ -1726,10 +1756,6 @@ function PetFrenzy:StartDurationStack()
 	return 0, 0, 0
 end
 
-function WildSpirits:Remains()
-	return max(0, min(self.buff_duration, self.buff_duration - (Player.time - self.last_used)))
-end
-
 -- End Ability Modifications
 
 local function UseCooldown(ability, overwrite)
@@ -1768,7 +1794,7 @@ APL[SPEC.BEASTMASTERY].main = function(self)
 	elseif MendPet:Usable() then
 		UseExtra(MendPet)
 	end
-	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or AspectOfTheWild:Up() or (WildSpirits.known and WildSpirits:Up())
+	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or AspectOfTheWild:Up() or (WildSpirits.known and WildMark:Up())
 	if Player:TimeInCombat() == 0 then
 --[[
 actions.precombat=flask
@@ -1826,7 +1852,7 @@ actions.cds+=/potion,if=buff.bestial_wrath.up&buff.aspect_of_the_wild.up&(target
 	if Opt.pot and Target.boss and SuperiorBattlePotionOfAgility:Usable() and (BestialWrath:Up() and AspectOfTheWild:Up() and (Target.health.pct < 35 or not KillerInstinct.known) or Target.timeToDie < 25) then
 		return UseCooldown(SuperiorBattlePotionOfAgility)
 	end
-	if WildSpirits:Usable() and WildSpirits:Down() then
+	if WildSpirits:Usable() and WildMark:Down() then
 		return UseCooldown(WildSpirits)
 	end
 end
@@ -2013,7 +2039,7 @@ actions+=/call_action_list,name=cleave,if=active_enemies>1&!talent.birds_of_prey
 actions+=/arcane_torrent
 actions+=/bag_of_tricks
 ]]
-	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or CoordinatedAssault:Up() or (WildSpirits.known and WildSpirits:Up())
+	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or CoordinatedAssault:Up() or (WildSpirits.known and WildMark:Up())
 	if Player.use_cds then
 		self:cds()
 	end
@@ -2058,7 +2084,7 @@ actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
 	if Opt.pot and Target.boss and not Player:InArenaOrBattleground() and PotionOfUnbridledFury:Usable() and ((CoordinatedAssault:Up() and Player:BloodlustActive()) or Target.timeToDie < 61) then
 		return UseCooldown(PotionOfUnbridledFury)
 	end
-	if WildSpirits:Usable() and WildSpirits:Down() then
+	if WildSpirits:Usable() and WildMark:Down() then
 		return UseCooldown(WildSpirits)
 	end
 end
@@ -2368,93 +2394,120 @@ end
 
 APL[SPEC.SURVIVAL].cleave = function(self)
 --[[
-actions.cleave=variable,name=carve_cdr,op=setif,value=active_enemies,value_else=5,condition=active_enemies<5
-actions.cleave+=/mongoose_bite,target_if=min:time_to_die,if=debuff.latent_poison.stack>(active_enemies|9)&target.time_to_die<active_enemies*gcd
-actions.cleave+=/a_murder_of_crows
-actions.cleave+=/coordinated_assault
-actions.cleave+=/carve,if=dot.shrapnel_bomb.ticking&!talent.hydras_bite.enabled|dot.shrapnel_bomb.ticking&active_enemies>5
-actions.cleave+=/wildfire_bomb,if=!talent.guerrilla_tactics.enabled|full_recharge_time<gcd|raid_event.adds.remains<6&raid_event.adds.exists
-actions.cleave+=/butchery,if=charges_fractional>2.5|dot.shrapnel_bomb.ticking|cooldown.wildfire_bomb.remains>active_enemies-gcd|raid_event.adds.remains<5&raid_event.adds.exists
-actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison.stack,if=debuff.latent_poison.stack>8
+actions.cleave=serpent_sting,target_if=min:remains,if=talent.hydras_bite.enabled&buff.vipers_venom.remains&buff.vipers_venom.remains<gcd
+actions.cleave+=/wild_spirits,if=!raid_event.adds.exists|raid_event.adds.remains>=10|active_enemies>=raid_event.adds.count*2
+actions.cleave+=/resonating_arrow,if=!raid_event.adds.exists|raid_event.adds.remains>=8|active_enemies>=raid_event.adds.count*2
+actions.cleave+=/coordinated_assault,if=!raid_event.adds.exists|raid_event.adds.remains>=10|active_enemies>=raid_event.adds.count*2
+actions.cleave+=/wildfire_bomb,if=full_recharge_time<gcd
+actions.cleave+=/death_chakram,if=(!raid_event.adds.exists|raid_event.adds.remains>5|active_enemies>=raid_event.adds.count*2)|focus+cast_regen<focus.max&!runeforge.bag_of_munitions.equipped
+actions.cleave+=/call_action_list,name=nta,if=runeforge.nessingwarys_trapping_apparatus.equipped&focus<variable.mb_rs_cost
 actions.cleave+=/chakrams
-actions.cleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
-actions.cleave+=/harpoon,if=talent.terms_of_engagement.enabled
-actions.cleave+=/carve,if=talent.guerrilla_tactics.enabled
-actions.cleave+=/butchery,if=cooldown.wildfire_bomb.remains>(active_enemies|5)
+actions.cleave+=/butchery,if=dot.shrapnel_bomb.ticking&(dot.internal_bleeding.stack<2|dot.shrapnel_bomb.remains<gcd)
+actions.cleave+=/carve,if=dot.shrapnel_bomb.ticking&!set_bonus.tier28_2pc
+actions.cleave+=/butchery,if=charges_fractional>2.5&cooldown.wildfire_bomb.full_recharge_time>spell_targets%2
 actions.cleave+=/flanking_strike,if=focus+cast_regen<focus.max
-actions.cleave+=/wildfire_bomb,if=dot.wildfire_bomb.refreshable|talent.wildfire_infusion.enabled
-actions.cleave+=/serpent_sting,target_if=min:remains,if=buff.vipers_venom.react
-actions.cleave+=/carve,if=cooldown.wildfire_bomb.remains>variable.carve_cdr%2
+actions.cleave+=/carve,if=cooldown.wildfire_bomb.full_recharge_time>spell_targets%2
+actions.cleave+=/wildfire_bomb,if=buff.mad_bombardier.up
+actions.cleave+=/kill_command,target_if=dot.pheromone_bomb.ticking&set_bonus.tier28_2pc
+actions.cleave+=/kill_shot,if=buff.flayers_mark.up
+actions.cleave+=/flayed_shot,target_if=max:target.health.pct
+actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&!ticking&next_wi_bomb.volatile&target.time_to_die>15&focus+cast_regen>35&active_enemies<=4
+actions.cleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&full_recharge_time<gcd&(runeforge.nessingwarys_trapping_apparatus.equipped&cooldown.freezing_trap.remains&cooldown.tar_trap.remains|!runeforge.nessingwarys_trapping_apparatus.equipped)
+actions.cleave+=/wildfire_bomb,if=!dot.wildfire_bomb.ticking&!set_bonus.tier28_2pc|charges_fractional>1.3
+actions.cleave+=/butchery,if=(!next_wi_bomb.shrapnel|!talent.wildfire_infusion.enabled)&cooldown.wildfire_bomb.full_recharge_time>spell_targets%2
+actions.cleave+=/a_murder_of_crows
+actions.cleave+=/steel_trap,if=focus+cast_regen<focus.max
+actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&talent.hydras_bite.enabled&target.time_to_die>8
+actions.cleave+=/carve
+actions.cleave+=/kill_command,target_if=focus+cast_regen<focus.max&(runeforge.nessingwarys_trapping_apparatus.equipped&cooldown.freezing_trap.remains&cooldown.tar_trap.remains|!runeforge.nessingwarys_trapping_apparatus.equipped)
 actions.cleave+=/kill_shot
-actions.cleave+=/flayed_shot
-actions.cleave+=/steel_trap
-actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&buff.tip_of_the_spear.stack<3&next_wi_bomb.volatile|refreshable&legendary.latent_poison_injectors.enabled
-# To simulate usage for Mongoose Bite or Raptor Strike during Aspect of the Eagle, copy each occurrence of the action and append _eagle to the action name.
-actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison.stack
-actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack
+actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&target.time_to_die>8
+actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison_injection.stack
+actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison_injection.stack
 ]]
-	local carve_cdr = min(5, Player.enemies)
-	if LatentPoisonInjectors.known and MongooseBite:Usable() and LatentPoisonInjectors:Stack() > 9 and Target.timeToDie < (Player.enemies * Player.gcd) then
-		return MongooseBite
+	if HydrasBite.known and SerpentSting:Usable() and VipersVenom:Up() and VipersVenom:Remains() < Player.gcd then
+		return SerpentSting
 	end
-	if AMurderOfCrows:Usable() then
-		UseCooldown(AMurderOfCrows)
+	if WildSpirits:Usable() and WildMark:Down() and (CoordinatedAssault:Up() or CoordinatedAssault:Ready() or not CoordinatedAssault:Ready(20)) then
+		UseCooldown(WildSpirits)
 	end
-	if CoordinatedAssault:Usable() then
+	if ResonatingArrow:Usable() then
+		UseCooldown(ResonatingArrow)
+	end
+	if CoordinatedAssault:Usable() and (not WildSpirits.known or WildSpirits:Ready() or WildMark:Up()) then
 		UseCooldown(CoordinatedAssault)
 	end
-	if Carve:Usable() and ShrapnelBomb:Ticking() > 0 and (not HydrasBite.known or Player.enemies > 5) then
-		return Carve
-	end
-	if WildfireBomb:Usable() and (not GuerrillaTactics.known or WildfireBomb:FullRechargeTime() < Player.gcd) then
+	if WildfireBomb:Usable() and WildfireBomb:FullRechargeTime() < Player.gcd then
 		return WildfireBomb
 	end
-	if Butchery:Usable() and (Butchery:ChargesFractional() > 2.5 or ShrapnelBomb:Ticking() > 0 or WildfireBomb:Cooldown() > (Player.enemies - Player.gcd)) then
-		return Butchery
-	end
-	if LatentPoisonInjectors.known and MongooseBite:Usable() and LatentPoisonInjectors:Stack() > 8 then
-		return MongooseBite
+	if DeathChakram:Usable() then
+		UseCooldown(DeathChakram)
 	end
 	if Chakrams:Usable() then
 		return Chakrams
 	end
-	if KillCommand:Usable() and KillCommand:WontCapFocus() then
-		return KillCommand
+	if Butchery:Usable() and ShrapnelBomb:Up() and (InternalBleeding:Stack() < 2 or ShrapnelBomb:Remains() < Player.gcd) then
+		return Butchery
 	end
-	if TermsOfEngagement.known and Harpoon:Usable() then
-		UseCooldown(Harpoon)
-	end
-	if GuerrillaTactics.known and Carve:Usable() then
+	if Carve:Usable() and ShrapnelBomb:Up() and not MadBombardier.known then
 		return Carve
 	end
-	if Butchery:Usable() and WildfireBomb:Cooldown() > carve_cdr then
+	if Butchery:Usable() and Butchery:ChargesFractional() > 2.5 and WildfireBomb:FullRechargeTime() > (Player.enemies / 2) then
 		return Butchery
 	end
 	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
 		return FlankingStrike
 	end
-	if WildfireBomb:Usable() and (WildfireInfusion.known or WildfireBomb:Refreshable()) then
-		return WildfireBomb
+	if Carve:Usable() and WildfireBomb:FullRechargeTime() > (Player.enemies / 2) then
+		return Carve
 	end
-	if VipersVenom.known and SerpentSting:Usable() and VipersVenom:Up() then
+	if MadBombardier.known then
+		if WildfireBomb:Usable() and MadBombardier:Up() then
+			return WildfireBomb
+		end
+		if KillCommand:Usable() and PheromoneBomb:Up() then
+			return KillCommand
+		end
+	end
+	if FlayedShot.known then
+		if KillShot:Usable() and FlayersMark:Up() then
+			return KillShot
+		end
+		if FlayedShot:Usable() then
+			return FlayedShot
+		end
+	end
+	if SerpentSting:Usable() and SerpentSting:Refreshable() and VolatileBomb.next and Target.timeToDie > 15 and (Player:Focus() + SerpentSting:CastRegen()) > 35 and Player.enemies <= 4 then
 		return SerpentSting
 	end
-	if Carve:Usable() and WildfireBomb:Cooldown() > (carve_cdr / 2) then
+	if KillCommand:Usable() and KillCommand:WontCapFocus() and KillCommand:FullRechargeTime() < Player.gcd and (not NesingwarysTrappingApparatus.known or not (FreezingTrap:Ready() or TarTrap:Ready())) then
+		return KillCommand
+	end
+	if WildfireBomb:Usable() and (WildfireBomb:ChargesFractional() > 1.3 or (not MadBombardier.known and WildfireBomb:Down())) then
+		return WildfireBomb
+	end
+	if Butchery:Usable() and (not WildfireInfusion.known or not ShrapnelBomb.next) and WildfireBomb:FullRechargeTime() > (Player.enemies / 2) then
+		return Butchery
+	end
+	if AMurderOfCrows:Usable() then
+		UseCooldown(AMurderOfCrows)
+	end
+	if SteelTrap:Usable() and SteelTrap:WontCapFocus() then
+		UseCooldown(SteelTrap)
+	end
+	if HydrasBite.known and SerpentSting:Usable() and SerpentSting:Refreshable() and Target.timeToDie > 8 then
+		return SerpentSting
+	end
+	if Carve:Usable() then
 		return Carve
+	end
+	if KillCommand:Usable() and KillCommand:WontCapFocus() and (not NesingwarysTrappingApparatus.known or not (FreezingTrap:Ready() or TarTrap:Ready())) then
+		return KillCommand
 	end
 	if KillShot:Usable() then
 		return KillShot
 	end
-	if FlayedShot:Usable() then
-		return FlayedShot
-	end
-	if SteelTrap:Usable() then
-		UseCooldown(SteelTrap)
-	end
-	if SerpentSting:Usable() and SerpentSting:Refreshable() and (LatentPoisonInjectors.known or (VolatileBomb.next and (not TipOfTheSpear.known or TipOfTheSpear:Stack() < 3))) then
-		return SerpentSting
-	end
-	if SerpentSting:Usable() and HydrasBite.known and VolatileBomb.next and SerpentSting:Ticking() < Player.enemies and WildfireBomb:Ready(6 * Player.gcd) then
+	if SerpentSting:Usable() and SerpentSting:Refreshable() and Target.timeToDie > 8 then
 		return SerpentSting
 	end
 	if MongooseBite:Usable() then
@@ -2959,7 +3012,7 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 		end
 	end
 	if event == 'RANGE_DAMAGE' or event == 'SPELL_DAMAGE' or event == 'SPELL_ABSORBED' or event == 'SPELL_MISSED' or event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
-		ability:CastLanded(dstGUID, event)
+		ability:CastLanded(dstGUID, event, missType)
 	end
 end
 
@@ -3068,6 +3121,9 @@ function events:PLAYER_EQUIPMENT_CHANGED()
 			inventoryItems[i].can_use = false
 		end
 	end
+
+	Player.set_bonus.t28 = (Player:Equipped(188859) and 1 or 0) + (Player:Equipped(188861) and 1 or 0) + (Player:Equipped(188856) and 1 or 0) + (Player:Equipped(188858) and 1 or 0) + (Player:Equipped(188860) and 1 or 0)
+
 	Player:UpdateAbilities()
 end
 
