@@ -1180,6 +1180,7 @@ RylakstalkersConfoundingStrikes.bonus_id = 7016
 -- Tier effects
 local MadBombardier = Ability:Add(364490, true, true, 363805)
 MadBombardier.buff_duration = 20
+MadBombardier:TrackAuras()
 -- Racials
 
 -- Trinket Effects
@@ -1757,6 +1758,28 @@ function PetFrenzy:StartDurationStack()
 	end
 	return 0, 0, 0
 end
+
+function MadBombardier:Remains()
+	if self.consumed then
+		return 0
+	end
+	return Ability.Remains(self)
+end
+
+function MadBombardier:ApplyAura(...)
+	Ability.ApplyAura(self, ...)
+	self.consumed = false
+end
+
+function WildfireBomb:CastSuccess(...)
+	Ability.CastSuccess(self, ...)
+	if MadBombardier.known then
+		MadBombardier.consumed = true
+	end
+end
+ShrapnelBomb.CastSuccess = WildfireBomb.CastSuccess
+PheromoneBomb.CastSuccess = WildfireBomb.CastSuccess
+VolatileBomb.CastSuccess = WildfireBomb.CastSuccess
 
 -- End Ability Modifications
 
@@ -2868,10 +2891,6 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 		ability:CastFailed(dstGUID, missType)
 		return
 	end
-
-	if dstGUID == Player.guid or dstGUID == Player.pet.guid then
-		return -- ignore buffs beyond here
-	end
 	if ability.aura_targets then
 		if event == 'SPELL_AURA_APPLIED' then
 			ability:ApplyAura(dstGUID)
@@ -2880,6 +2899,9 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 		elseif event == 'SPELL_AURA_REMOVED' then
 			ability:RemoveAura(dstGUID)
 		end
+	end
+	if dstGUID == Player.guid or dstGUID == Player.pet.guid then
+		return -- ignore buffs beyond here
 	end
 	if Opt.auto_aoe then
 		if event == 'SPELL_MISSED' and (missType == 'EVADE' or missType == 'IMMUNE') then
