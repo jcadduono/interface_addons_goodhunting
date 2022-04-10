@@ -3,5 +3,5 @@
 ## Notes: Good Hunting is an addon for hunters that simplifies gameplay and maximizes DPS by doing all the decision making for you
 ## Author: jcadduono @ curseforge.com or Spy#1955 @ BattleTag
 ## SavedVariablesPerCharacter: GoodHunting
-## Version: 9.2.0-0
+## Version: 9.2.0-1
 GoodHunting.lua
