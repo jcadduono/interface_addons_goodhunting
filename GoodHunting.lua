@@ -1787,6 +1787,10 @@ ShrapnelBomb.CastSuccess = WildfireBomb.CastSuccess
 PheromoneBomb.CastSuccess = WildfireBomb.CastSuccess
 VolatileBomb.CastSuccess = WildfireBomb.CastSuccess
 
+function ResonatingArrow:Remains()
+	return max(0, self.buff_duration - (Player.time - self.last_used))
+end
+
 -- End Ability Modifications
 
 local function UseCooldown(ability, overwrite)
@@ -2216,7 +2220,7 @@ actions.st+=/wildfire_bomb,if=(next_wi_bomb.volatile&dot.serpent_sting.ticking|n
 	if FlayedShot:Usable() then
 		return FlayedShot
 	end
-	if ResonatingArrow:Usable() then
+	if ResonatingArrow:Usable() and ResonatingArrow:Down() then
 		UseCooldown(ResonatingArrow)
 	end
 	if WildSpirits:Usable() and WildMark:Down() and (CoordinatedAssault:Up() or CoordinatedAssault:Ready() or not CoordinatedAssault:Ready(20)) then
@@ -2337,7 +2341,7 @@ actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison_injection.stac
 	if WildSpirits:Usable() and WildMark:Down() and (CoordinatedAssault:Up() or CoordinatedAssault:Ready() or not CoordinatedAssault:Ready(20)) then
 		UseCooldown(WildSpirits)
 	end
-	if ResonatingArrow:Usable() then
+	if ResonatingArrow:Usable() and ResonatingArrow:Down() then
 		UseCooldown(ResonatingArrow)
 	end
 	if CoordinatedAssault:Usable() and (not WildSpirits.known or WildSpirits:Ready() or WildMark:Up()) then
