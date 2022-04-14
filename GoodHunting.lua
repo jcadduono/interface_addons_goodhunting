@@ -1167,6 +1167,8 @@ local ResonatingArrow = Ability:Add(308491, false, true, 308498) -- Kyrian
 ResonatingArrow.cooldown_duration = 60
 ResonatingArrow.buff_duration = 10
 ResonatingArrow:AutoAoe(false, 'apply')
+local SummonSteward = Ability:Add(324739, false, true) -- Kyrian
+SummonSteward.cooldown_duration = 300
 local WildSpirits = Ability:Add(328231, false, true) -- Night Fae
 WildSpirits.cooldown_duration = 120
 local WildMark = Ability:Add(328275, false, true) -- triggered by Wild Spirits
@@ -1261,6 +1263,8 @@ GreaterFlaskOfTheCurrents.buff = Ability:Add(298836, true, true)
 local SuperiorBattlePotionOfAgility = InventoryItem:Add(168489)
 SuperiorBattlePotionOfAgility.buff = Ability:Add(298146, true, true)
 SuperiorBattlePotionOfAgility.buff.triggers_gcd = false
+local PhialOfSerenity = InventoryItem:Add(177278) -- Provided by Summon Steward
+PhialOfSerenity.max_charges = 3
 local PotionOfUnbridledFury = InventoryItem:Add(169299)
 PotionOfUnbridledFury.buff = Ability:Add(300714, true, true)
 PotionOfUnbridledFury.buff.triggers_gcd = false
@@ -1821,7 +1825,7 @@ local APL = {
 	[SPEC.SURVIVAL] = {},
 }
 
-APL[SPEC.BEASTMASTERY].main = function(self)
+APL[SPEC.BEASTMASTERY].Main = function(self)
 	if CallPet:Usable() then
 		UseExtra(CallPet)
 	elseif RevivePet:Usable() then
@@ -1837,6 +1841,12 @@ actions.precombat+=/summon_pet
 actions.precombat+=/potion
 actions.precombat+=/aspect_of_the_wild,precast_time=1.1
 ]]
+		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
+			UseCooldown(Trinket.BottledFlayedwingToxin)
+		end
+		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
+			UseCooldown(SummonSteward)
+		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
 			if GreaterFlaskOfTheCurrents:Usable() and GreaterFlaskOfTheCurrents.buff:Remains() < 300 then
 				UseCooldown(GreaterFlaskOfTheCurrents)
@@ -2012,7 +2022,7 @@ actions.cleave+=/spitting_cobra
 	end
 end
 
-APL[SPEC.MARKSMANSHIP].main = function(self)
+APL[SPEC.MARKSMANSHIP].Main = function(self)
 	if CallPet:Usable() then
 		UseExtra(CallPet)
 	elseif RevivePet:Usable() then
@@ -2021,6 +2031,12 @@ APL[SPEC.MARKSMANSHIP].main = function(self)
 		UseExtra(MendPet)
 	end
 	if Player:TimeInCombat() == 0 then
+		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
+			UseCooldown(Trinket.BottledFlayedwingToxin)
+		end
+		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
+			UseCooldown(SummonSteward)
+		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
 			if GreaterFlaskOfTheCurrents:Usable() and GreaterFlaskOfTheCurrents.buff:Remains() < 300 then
 				UseCooldown(GreaterFlaskOfTheCurrents)
@@ -2032,7 +2048,7 @@ APL[SPEC.MARKSMANSHIP].main = function(self)
 	end
 end
 
-APL[SPEC.SURVIVAL].main = function(self)
+APL[SPEC.SURVIVAL].Main = function(self)
 	if CallPet:Usable() then
 		UseExtra(CallPet)
 	elseif RevivePet:Usable() then
@@ -2043,6 +2059,9 @@ APL[SPEC.SURVIVAL].main = function(self)
 	if Player:TimeInCombat() == 0 then
 		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
 			UseCooldown(Trinket.BottledFlayedwingToxin)
+		end
+		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
+			UseCooldown(SummonSteward)
 		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
 			if GreaterFlaskOfTheCurrents:Usable() and GreaterFlaskOfTheCurrents.buff:Remains() < 300 then
@@ -2718,7 +2737,7 @@ function UI:UpdateCombat()
 	
 	Player:Update()
 
-	Player.main = APL[Player.spec]:main()
+	Player.main = APL[Player.spec]:Main()
 	if Player.main then
 		ghPanel.icon:SetTexture(Player.main.icon)
 	end
