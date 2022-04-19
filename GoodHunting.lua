@@ -139,6 +139,7 @@ local Player = {
 	combat_start = 0,
 	level = 1,
 	spec = 0,
+	group_size = 1,
 	target_mode = 0,
 	gcd = 1.5,
 	gcd_remains = 0,
@@ -1273,6 +1274,8 @@ local Trinket1 = InventoryItem:Add(0)
 local Trinket2 = InventoryItem:Add(0)
 Trinket.BottledFlayedwingToxin = InventoryItem:Add(178742)
 Trinket.BottledFlayedwingToxin.buff = Ability:Add(345545, true, true)
+Trinket.SoleahsSecretTechnique = InventoryItem:Add(185818)
+Trinket.SoleahsSecretTechnique.buff = Ability:Add(368512, true, true)
 -- End Inventory Items
 
 -- Start Player API
@@ -1844,6 +1847,9 @@ actions.precombat+=/aspect_of_the_wild,precast_time=1.1
 		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
 			UseCooldown(Trinket.BottledFlayedwingToxin)
 		end
+		if Trinket.SoleahsSecretTechnique.can_use and Trinket.SoleahsSecretTechnique.buff:Remains() < 300 and Trinket.SoleahsSecretTechnique:Usable() and Player.group_size > 1 then
+			UseCooldown(Trinket.SoleahsSecretTechnique)
+		end
 		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
 			UseCooldown(SummonSteward)
 		end
@@ -2034,6 +2040,9 @@ APL[SPEC.MARKSMANSHIP].Main = function(self)
 		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
 			UseCooldown(Trinket.BottledFlayedwingToxin)
 		end
+		if Trinket.SoleahsSecretTechnique.can_use and Trinket.SoleahsSecretTechnique.buff:Remains() < 300 and Trinket.SoleahsSecretTechnique:Usable() and Player.group_size > 1 then
+			UseCooldown(Trinket.SoleahsSecretTechnique)
+		end
 		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
 			UseCooldown(SummonSteward)
 		end
@@ -2059,6 +2068,9 @@ APL[SPEC.SURVIVAL].Main = function(self)
 	if Player:TimeInCombat() == 0 then
 		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
 			UseCooldown(Trinket.BottledFlayedwingToxin)
+		end
+		if Trinket.SoleahsSecretTechnique.can_use and Trinket.SoleahsSecretTechnique.buff:Remains() < 300 and Trinket.SoleahsSecretTechnique:Usable() and Player.group_size > 1 then
+			UseCooldown(Trinket.SoleahsSecretTechnique)
 		end
 		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
 			UseCooldown(SummonSteward)
@@ -3117,6 +3129,10 @@ function events:UI_ERROR_MESSAGE(errorId)
 	) then
 		Player.pet.stuck = true
 	end
+end
+
+function events:GROUP_ROSTER_UPDATE()
+	Player.group_size = max(1, min(40, GetNumGroupMembers()))
 end
 
 function events:PLAYER_ENTERING_WORLD()
