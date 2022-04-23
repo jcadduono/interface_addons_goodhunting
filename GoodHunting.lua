@@ -5,10 +5,11 @@ if select(2, UnitClass('player')) ~= 'HUNTER' then
 end
 local ADDON_PATH = 'Interface\\AddOns\\' .. ADDON .. '\\'
 
--- copy heavily accessed global functions into local scope for performance
+-- reference heavily accessed global functions from local scope for performance
 local min = math.min
 local max = math.max
 local floor = math.floor
+local GetPowerRegen = _G.GetPowerRegen
 local GetSpellCharges = _G.GetSpellCharges
 local GetSpellCooldown = _G.GetSpellCooldown
 local GetSpellInfo = _G.GetSpellInfo
@@ -17,12 +18,12 @@ local GetUnitSpeed = _G.GetUnitSpeed
 local UnitAura = _G.UnitAura
 local UnitCastingInfo = _G.UnitCastingInfo
 local UnitChannelInfo = _G.UnitChannelInfo
+local UnitDetailedThreatSituation = _G.UnitDetailedThreatSituation
 local UnitHealth = _G.UnitHealth
 local UnitHealthMax = _G.UnitHealthMax
 local UnitPower = _G.UnitPower
 local UnitPowerMax = _G.UnitPowerMax
-local UnitDetailedThreatSituation = _G.UnitDetailedThreatSituation
--- end copy global functions
+-- end reference global functions
 
 -- useful functions
 local function between(n, min, max)
@@ -192,6 +193,7 @@ local Player = {
 	previous_gcd = {},-- list of previous GCD abilities
 	item_use_blacklist = { -- list of item IDs with on-use effects we should mark unusable
 	},
+	main_freecast = false,
 }
 
 -- current target information
@@ -507,6 +509,7 @@ function Ability:Add(spellId, buff, player, spellId2)
 		hasted_cooldown = false,
 		hasted_ticks = false,
 		known = false,
+		rank = 0,
 		focus_cost = 0,
 		cooldown_duration = 0,
 		buff_duration = 0,
@@ -541,10 +544,8 @@ function Ability:Usable(seconds, pool)
 	if not self.known then
 		return false
 	end
-	if not pool then
-		if self:Cost() > Player.focus.current then
-			return false
-		end
+	if not pool and self:Cost() > Player.focus.current then
+		return false
 	end
 	if self.requires_pet and not Player.pet.active then
 		return false
@@ -694,6 +695,11 @@ function Ability:Charges()
 	return floor(self:ChargesFractional())
 end
 
+function Ability:MaxCharges()
+	local _, max_charges = GetSpellCharges(self.spellId)
+	return max_charges or 0
+end
+
 function Ability:FullRechargeTime()
 	local charges, max_charges, recharge_start, recharge_time = GetSpellCharges(self.spellId)
 	if self:Casting() then
@@ -706,11 +712,6 @@ function Ability:FullRechargeTime()
 		return 0
 	end
 	return (max_charges - charges - 1) * recharge_time + (recharge_time - (Player.ctime - recharge_start) - Player.execute_remains)
-end
-
-function Ability:MaxCharges()
-	local _, max_charges = GetSpellCharges(self.spellId)
-	return max_charges or 0
 end
 
 function Ability:Duration()
@@ -816,9 +817,6 @@ function Ability:CastSuccess(dstGUID)
 		table.insert(Player.previous_gcd, 1, self)
 	end
 	if self.aura_targets and self.requires_react then
-		if self.activated then
-			self.activated = false
-		end
 		self:RemoveAura(self.auraTarget == 'player' and Player.guid or dstGUID)
 	end
 	if Opt.auto_aoe and self.auto_aoe and self.auto_aoe.trigger == 'SPELL_CAST_SUCCESS' then
@@ -844,9 +842,6 @@ function Ability:CastSuccess(dstGUID)
 end
 
 function Ability:CastLanded(dstGUID, event, missType)
-	if self.swing_queue then
-		Player:ResetSwing(true, false, event == 'SPELL_MISSED')
-	end
 	if self.traveling then
 		local oldest
 		for guid, cast in next, self.traveling do
@@ -1186,6 +1181,8 @@ NesingwarysTrappingApparatus.buff_duration = 5
 NesingwarysTrappingApparatus.bonus_id = 7004
 local RylakstalkersConfoundingStrikes = Ability:Add(336901, true, true)
 RylakstalkersConfoundingStrikes.bonus_id = 7016
+local Unity = Ability:Add(364743, true, true)
+Unity.bonus_id = 8122
 -- Tier effects
 local MadBombardier = Ability:Add(364490, true, true, 363805)
 MadBombardier.buff_duration = 20
@@ -1259,22 +1256,22 @@ function InventoryItem:Usable(seconds)
 end
 
 -- Inventory Items
-local GreaterFlaskOfTheCurrents = InventoryItem:Add(168651)
-GreaterFlaskOfTheCurrents.buff = Ability:Add(298836, true, true)
-local SuperiorBattlePotionOfAgility = InventoryItem:Add(168489)
-SuperiorBattlePotionOfAgility.buff = Ability:Add(298146, true, true)
-SuperiorBattlePotionOfAgility.buff.triggers_gcd = false
+local EternalFlask = InventoryItem:Add(171280)
+EternalFlask.buff = Ability:Add(307166, true, true)
 local PhialOfSerenity = InventoryItem:Add(177278) -- Provided by Summon Steward
 PhialOfSerenity.max_charges = 3
-local PotionOfUnbridledFury = InventoryItem:Add(169299)
-PotionOfUnbridledFury.buff = Ability:Add(300714, true, true)
-PotionOfUnbridledFury.buff.triggers_gcd = false
+local PotionOfPhantomFire = InventoryItem:Add(171349)
+PotionOfPhantomFire.buff = Ability:Add(307495, true, true)
+local PotionOfSpectralAgility = InventoryItem:Add(171270)
+PotionOfSpectralAgility.buff = Ability:Add(307159, true, true)
+local SpectralFlaskOfPower = InventoryItem:Add(171276)
+SpectralFlaskOfPower.buff = Ability:Add(307185, true, true)
 -- Equipment
 local Trinket1 = InventoryItem:Add(0)
 local Trinket2 = InventoryItem:Add(0)
 Trinket.BottledFlayedwingToxin = InventoryItem:Add(178742)
 Trinket.BottledFlayedwingToxin.buff = Ability:Add(345545, true, true)
-Trinket.SoleahsSecretTechnique = InventoryItem:Add(185818)
+Trinket.SoleahsSecretTechnique = InventoryItem:Add(190958)
 Trinket.SoleahsSecretTechnique.buff = Ability:Add(368512, true, true)
 -- End Inventory Items
 
@@ -1326,17 +1323,11 @@ function Player:ResetSwing(mainHand, offHand, missed)
 		self.swing.mh.speed = (mh or 0)
 		self.swing.mh.last = self.time
 		self.swing.mh.next = self.time + self.swing.mh.speed
-		if Opt.swing_timer then
-			ghPanel.text.tl:SetTextColor(1, missed and 0 or 1, missed and 0 or 1, 1)
-		end
 	end
 	if offHand then
 		self.swing.oh.speed = (oh or 0)
 		self.swing.oh.last = self.time
 		self.swing.oh.next = self.time + self.swing.oh.speed
-		if Opt.swing_timer then
-			ghPanel.text.tr:SetTextColor(1, missed and 0 or 1, missed and 0 or 1, 1)
-		end
 	end
 end
 
@@ -1421,10 +1412,10 @@ function Player:UpdateTime(timeStamp)
 end
 
 function Player:UpdateAbilities()
+	self.rescan_abilities = false
 	self.focus.max = UnitPowerMax('player', 2)
 
 	local node
-
 	for _, ability in next, abilities.all do
 		ability.known = false
 		for _, spellId in next, ability.spellIds do
@@ -1444,8 +1435,13 @@ function Player:UpdateAbilities()
 			node = C_Soulbinds.FindNodeIDActuallyInstalled(C_Soulbinds.GetActiveSoulbindID(), ability.conduit_id)
 			if node then
 				node = C_Soulbinds.GetNode(node)
-				if node and node.state == 3 then
-					ability.known = true
+				if node then
+					if node.conduitID == 0 then
+						self.rescan_abilities = true -- rescan on next target, conduit data has not finished loading
+					else
+						ability.known = node.state == 3
+						ability.rank = node.conduitRank
+					end
 				end
 			end
 		end
@@ -1583,6 +1579,7 @@ function Player:Init()
 	self.name = UnitName('player')
 	self.level = UnitLevel('player')
 	_, self.instance = IsInInstance()
+	events:GROUP_ROSTER_UPDATE()
 	events:PLAYER_SPECIALIZATION_CHANGED('player')
 end
 
@@ -1854,11 +1851,11 @@ actions.precombat+=/aspect_of_the_wild,precast_time=1.1
 			UseCooldown(SummonSteward)
 		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
-			if GreaterFlaskOfTheCurrents:Usable() and GreaterFlaskOfTheCurrents.buff:Remains() < 300 then
-				UseCooldown(GreaterFlaskOfTheCurrents)
+			if EternalFlask:Usable() and EternalFlask.buff:Remains() < 300 and SpectralFlaskOfPower.buff:Remains() < 300 then
+				UseCooldown(SpectralFlaskOfPower)
 			end
-			if Target.boss and SuperiorBattlePotionOfAgility:Usable() then
-				UseCooldown(SuperiorBattlePotionOfAgility)
+			if SpectralFlaskOfPower:Usable() and SpectralFlaskOfPower.buff:Remains() < 300 and EternalFlask.buff:Remains() < 300 then
+				UseCooldown(SpectralFlaskOfPower)
 			end
 		end
 		if Player.use_cds and AspectOfTheWild:Usable() then
@@ -2047,11 +2044,11 @@ APL[SPEC.MARKSMANSHIP].Main = function(self)
 			UseCooldown(SummonSteward)
 		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
-			if GreaterFlaskOfTheCurrents:Usable() and GreaterFlaskOfTheCurrents.buff:Remains() < 300 then
-				UseCooldown(GreaterFlaskOfTheCurrents)
+			if EternalFlask:Usable() and EternalFlask.buff:Remains() < 300 and SpectralFlaskOfPower.buff:Remains() < 300 then
+				UseCooldown(SpectralFlaskOfPower)
 			end
-			if Target.boss and SuperiorBattlePotionOfAgility:Usable() then
-				UseCooldown(SuperiorBattlePotionOfAgility)
+			if SpectralFlaskOfPower:Usable() and SpectralFlaskOfPower.buff:Remains() < 300 and EternalFlask.buff:Remains() < 300 then
+				UseCooldown(SpectralFlaskOfPower)
 			end
 		end
 	end
@@ -2076,11 +2073,11 @@ APL[SPEC.SURVIVAL].Main = function(self)
 			UseCooldown(SummonSteward)
 		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
-			if GreaterFlaskOfTheCurrents:Usable() and GreaterFlaskOfTheCurrents.buff:Remains() < 300 then
-				UseCooldown(GreaterFlaskOfTheCurrents)
+			if EternalFlask:Usable() and EternalFlask.buff:Remains() < 300 and SpectralFlaskOfPower.buff:Remains() < 300 then
+				UseCooldown(SpectralFlaskOfPower)
 			end
-			if Target.boss and PotionOfUnbridledFury:Usable() then
-				UseCooldown(PotionOfUnbridledFury)
+			if SpectralFlaskOfPower:Usable() and SpectralFlaskOfPower.buff:Remains() < 300 and EternalFlask.buff:Remains() < 300 then
+				UseCooldown(SpectralFlaskOfPower)
 			end
 		end
 		if Harpoon:Usable() then
@@ -2660,7 +2657,7 @@ function UI.OnResourceFrameHide()
 end
 
 function UI.OnResourceFrameShow()
-	if Opt.snap then
+	if Opt.snap and UI.anchor.points then
 		local p = UI.anchor.points[Player.spec][Opt.snap]
 		ghPanel:ClearAllPoints()
 		ghPanel:SetPoint(p[1], UI.anchor.frame, p[2], p[3], p[4])
@@ -2717,13 +2714,6 @@ function UI:UpdateDisplay()
 		           (Player.cd.spellId and IsUsableSpell(Player.cd.spellId)) or
 		           (Player.cd.itemId and IsUsableItem(Player.cd.itemId)))
 	end
-	if Player.wait_time then
-		local deficit = Player.wait_time - GetTime()
-		if deficit > 0 then
-			text_center = format('WAIT %.1fs', deficit)
-			dim = Opt.dimmer
-		end
-	end
 	if Player.main and Player.main.requires_react then
 		local react = Player.main:React()
 		if react > 0 then
@@ -2735,6 +2725,22 @@ function UI:UpdateDisplay()
 		if react > 0 then
 			text_cd = format('%.1f', react)
 		end
+	end
+	if Player.wait_time then
+		local deficit = Player.wait_time - GetTime()
+		if deficit > 0 then
+			text_center = format('WAIT %.1fs', deficit)
+			dim = Opt.dimmer
+		end
+	end
+	if Player.main and Player.main_freecast then
+		if not ghPanel.freeCastOverlayOn then
+			ghPanel.freeCastOverlayOn = true
+			ghPanel.border:SetTexture(ADDON_PATH .. 'freecast.blp')
+		end
+	elseif ghPanel.freeCastOverlayOn then
+		ghPanel.freeCastOverlayOn = false
+		ghPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 	end
 
 	ghPanel.dimmer:SetShown(dim)
@@ -2752,6 +2758,7 @@ function UI:UpdateCombat()
 	Player.main = APL[Player.spec]:Main()
 	if Player.main then
 		ghPanel.icon:SetTexture(Player.main.icon)
+		Player.main_freecast = Player.main.focus_cost > 0 and Player.main:Cost() == 0
 	end
 	if Player.cd then
 		ghCooldownPanel.icon:SetTexture(Player.cd.icon)
@@ -2764,8 +2771,7 @@ function UI:UpdateCombat()
 		ghExtraPanel.icon:SetTexture(Player.extra.icon)
 	end
 	if Opt.interrupt then
-		local ends, notInterruptible
-		_, _, _, start, ends, _, _, notInterruptible = UnitCastingInfo('target')
+		local _, _, _, start, ends, _, _, notInterruptible = UnitCastingInfo('target')
 		if not start then
 			_, _, _, start, ends, _, notInterruptible = UnitChannelInfo('target')
 		end
@@ -2962,6 +2968,9 @@ end
 
 function events:PLAYER_TARGET_CHANGED()
 	Target:Update()
+	if Player.rescan_abilities then
+		Player:UpdateAbilities()
+	end
 end
 
 function events:UNIT_FACTION(unitID)
