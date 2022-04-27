@@ -1256,6 +1256,8 @@ function InventoryItem:Usable(seconds)
 end
 
 -- Inventory Items
+local EternalAugmentRune = InventoryItem:Add(190384)
+EternalAugmentRune.buff = Ability:Add(367405, true, true)
 local EternalFlask = InventoryItem:Add(171280)
 EternalFlask.buff = Ability:Add(307166, true, true)
 local PhialOfSerenity = InventoryItem:Add(177278) -- Provided by Summon Steward
@@ -1850,6 +1852,9 @@ actions.precombat+=/aspect_of_the_wild,precast_time=1.1
 		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
 			UseCooldown(SummonSteward)
 		end
+		if EternalAugmentRune:Usable() and EternalAugmentRune.buff:Remains() < 300 then
+			UseCooldown(EternalAugmentRune)
+		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
 			if EternalFlask:Usable() and EternalFlask.buff:Remains() < 300 and SpectralFlaskOfPower.buff:Remains() < 300 then
 				UseCooldown(SpectralFlaskOfPower)
@@ -2043,6 +2048,9 @@ APL[SPEC.MARKSMANSHIP].Main = function(self)
 		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
 			UseCooldown(SummonSteward)
 		end
+		if EternalAugmentRune:Usable() and EternalAugmentRune.buff:Remains() < 300 then
+			UseCooldown(EternalAugmentRune)
+		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
 			if EternalFlask:Usable() and EternalFlask.buff:Remains() < 300 and SpectralFlaskOfPower.buff:Remains() < 300 then
 				UseCooldown(SpectralFlaskOfPower)
@@ -2071,6 +2079,9 @@ APL[SPEC.SURVIVAL].Main = function(self)
 		end
 		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
 			UseCooldown(SummonSteward)
+		end
+		if EternalAugmentRune:Usable() and EternalAugmentRune.buff:Remains() < 300 then
+			UseCooldown(EternalAugmentRune)
 		end
 		if Opt.pot and not Player:InArenaOrBattleground() then
 			if EternalFlask:Usable() and EternalFlask.buff:Remains() < 300 and SpectralFlaskOfPower.buff:Remains() < 300 then
