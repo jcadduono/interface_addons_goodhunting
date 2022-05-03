@@ -147,6 +147,7 @@ local Player = {
 	cast_remains = 0,
 	execute_remains = 0,
 	haste_factor = 1,
+	moving = false,
 	health = {
 		current = 0,
 		max = 100,
@@ -165,8 +166,6 @@ local Player = {
 			max = 100,
 		},
 	},
-	moving = false,
-	movement_speed = 100,
 	threat = {
 		status = 0,
 		pct = 0,
@@ -175,15 +174,11 @@ local Player = {
 	swing = {
 		mh = {
 			last = 0,
-			next = 0,
 			speed = 0,
-			remains = 0,
 		},
 		oh = {
 			last = 0,
-			next = 0,
 			speed = 0,
-			remains = 0,
 		},
 		last_taken = 0,
 	},
@@ -1324,12 +1319,10 @@ function Player:ResetSwing(mainHand, offHand, missed)
 	if mainHand then
 		self.swing.mh.speed = (mh or 0)
 		self.swing.mh.last = self.time
-		self.swing.mh.next = self.time + self.swing.mh.speed
 	end
 	if offHand then
 		self.swing.oh.speed = (oh or 0)
 		self.swing.oh.last = self.time
-		self.swing.oh.next = self.time + self.swing.oh.speed
 	end
 end
 
@@ -1530,7 +1523,7 @@ function Player:UpdatePet()
 end
 
 function Player:Update()
-	local _, start, duration, remains, spellId, speed, max_speed
+	local _, start, duration, remains, spellId
 	self.main =  nil
 	self.cd = nil
 	self.interrupt = nil
@@ -1553,11 +1546,7 @@ function Player:Update()
 		self.focus.current = self.focus.current - self.ability_casting:Cost()
 	end
 	self.focus.current = max(0, min(self.focus.max, self.focus.current))
-	self.swing.mh.remains = max(0, self.swing.mh.next - self.time - self.execute_remains)
-	self.swing.oh.remains = max(0, self.swing.oh.next - self.time - self.execute_remains)
-	speed, max_speed = GetUnitSpeed('player')
-	self.moving = speed ~= 0
-	self.movement_speed = max_speed / 7 * 100
+	self.moving = GetUnitSpeed('player') ~= 0
 	self:UpdateThreat()
 	self:UpdatePet()
 
@@ -3083,11 +3072,12 @@ function events:PLAYER_EQUIPMENT_CHANGED()
 
 	Player.set_bonus.t28 = (Player:Equipped(188859) and 1 or 0) + (Player:Equipped(188861) and 1 or 0) + (Player:Equipped(188856) and 1 or 0) + (Player:Equipped(188858) and 1 or 0) + (Player:Equipped(188860) and 1 or 0)
 
+	Player:ResetSwing(true, true)
 	Player:UpdateAbilities()
 end
 
-function events:PLAYER_SPECIALIZATION_CHANGED(unitName)
-	if unitName ~= 'player' then
+function events:PLAYER_SPECIALIZATION_CHANGED(unitId)
+	if unitId ~= 'player' then
 		return
 	end
 	Player.spec = GetSpecialization() or 0
