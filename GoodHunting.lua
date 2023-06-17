@@ -9,12 +9,13 @@ local ADDON_PATH = 'Interface\\AddOns\\' .. ADDON .. '\\'
 local min = math.min
 local max = math.max
 local floor = math.floor
-local GetPowerRegen = _G.GetPowerRegen
+local GetPowerRegenForPowerType = _G.GetPowerRegenForPowerType
 local GetSpellCharges = _G.GetSpellCharges
 local GetSpellCooldown = _G.GetSpellCooldown
 local GetSpellInfo = _G.GetSpellInfo
 local GetTime = _G.GetTime
 local GetUnitSpeed = _G.GetUnitSpeed
+local UnitAttackSpeed = _G.UnitAttackSpeed
 local UnitAura = _G.UnitAura
 local UnitCastingInfo = _G.UnitCastingInfo
 local UnitChannelInfo = _G.UnitChannelInfo
@@ -30,11 +31,15 @@ local function between(n, min, max)
 	return n >= min and n <= max
 end
 
+local function clamp(n, min, max)
+	return (n < min and min) or (n > max and max) or n
+end
+
 local function startsWith(str, start) -- case insensitive check to see if a string matches the start of another string
 	if type(str) ~= 'string' then
 		return false
 	end
-   return string.lower(str:sub(1, start:len())) == start:lower()
+	return string.lower(str:sub(1, start:len())) == start:lower()
 end
 -- end useful functions
 
@@ -116,9 +121,30 @@ local UI = {
 local CombatEvent = {}
 
 -- automatically registered events container
-local events = {}
+local Events = {}
 
-local timer = {
+-- player ability template
+local Ability = {}
+Ability.__index = Ability
+
+-- classified player abilities
+local Abilities = {
+	all = {},
+	bySpellId = {},
+	velocity = {},
+	autoAoe = {},
+	trackAuras = {},
+}
+
+-- methods for target tracking / aoe modes
+local AutoAoe = {
+	targets = {},
+	blacklist = {},
+	ignored_units = {},
+}
+
+-- timers for updating combat/display/hp info
+local Timer = {
 	combat = 0,
 	display = 0,
 	health = 0,
@@ -130,6 +156,14 @@ local SPEC = {
 	BEASTMASTERY = 1,
 	MARKSMANSHIP = 2,
 	SURVIVAL = 3,
+}
+
+-- action priority list container
+local APL = {
+	[SPEC.NONE] = {},
+	[SPEC.BEASTMASTERY] = {},
+	[SPEC.MARKSMANSHIP] = {},
+	[SPEC.SURVIVAL] = {},
 }
 
 -- current player information
@@ -144,13 +178,17 @@ local Player = {
 	target_mode = 0,
 	gcd = 1.5,
 	gcd_remains = 0,
-	cast_remains = 0,
 	execute_remains = 0,
 	haste_factor = 1,
 	moving = false,
 	health = {
 		current = 0,
 		max = 100,
+	},
+	cast = {
+		start = 0,
+		ends = 0,
+		remains = 0,
 	},
 	focus = {
 		current = 0,
@@ -175,18 +213,25 @@ local Player = {
 		mh = {
 			last = 0,
 			speed = 0,
+			remains = 0,
 		},
 		oh = {
 			last = 0,
 			speed = 0,
+			remains = 0,
 		},
 		last_taken = 0,
 	},
 	set_bonus = {
-		t28 = 0,
+		t29 = 0,
+		t30 = 0,
 	},
 	previous_gcd = {},-- list of previous GCD abilities
 	item_use_blacklist = { -- list of item IDs with on-use effects we should mark unusable
+		[190958] = true, -- Soleah's Secret Technique
+		[193757] = true, -- Ruby Whelp Shell
+		[202612] = true, -- Screaming Black Dragonscale
+		[203729] = true, -- Ominous Chromatic Essence
 	},
 	main_freecast = false,
 }
@@ -211,6 +256,10 @@ ghPanel:SetPoint('CENTER', 0, -169)
 ghPanel:SetFrameStrata('BACKGROUND')
 ghPanel:SetSize(64, 64)
 ghPanel:SetMovable(true)
+ghPanel:SetUserPlaced(true)
+ghPanel:RegisterForDrag('LeftButton')
+ghPanel:SetScript('OnDragStart', ghPanel.StartMoving)
+ghPanel:SetScript('OnDragStop', ghPanel.StopMovingOrSizing)
 ghPanel:Hide()
 ghPanel.icon = ghPanel:CreateTexture(nil, 'BACKGROUND')
 ghPanel.icon:SetAllPoints(ghPanel)
@@ -250,17 +299,18 @@ ghPanel.text.center:SetFont('Fonts\\FRIZQT__.TTF', 12, 'OUTLINE')
 ghPanel.text.center:SetAllPoints(ghPanel.text)
 ghPanel.text.center:SetJustifyH('CENTER')
 ghPanel.text.center:SetJustifyV('CENTER')
-ghPanel.button = CreateFrame('Button', 'ghPanelButton', ghPanel)
+ghPanel.button = CreateFrame('Button', nil, ghPanel)
 ghPanel.button:SetAllPoints(ghPanel)
 ghPanel.button:RegisterForClicks('LeftButtonDown', 'RightButtonDown', 'MiddleButtonDown')
 local ghPreviousPanel = CreateFrame('Frame', 'ghPreviousPanel', UIParent)
 ghPreviousPanel:SetFrameStrata('BACKGROUND')
 ghPreviousPanel:SetSize(64, 64)
-ghPreviousPanel:Hide()
+ghPreviousPanel:SetMovable(true)
+ghPreviousPanel:SetUserPlaced(true)
 ghPreviousPanel:RegisterForDrag('LeftButton')
 ghPreviousPanel:SetScript('OnDragStart', ghPreviousPanel.StartMoving)
 ghPreviousPanel:SetScript('OnDragStop', ghPreviousPanel.StopMovingOrSizing)
-ghPreviousPanel:SetMovable(true)
+ghPreviousPanel:Hide()
 ghPreviousPanel.icon = ghPreviousPanel:CreateTexture(nil, 'BACKGROUND')
 ghPreviousPanel.icon:SetAllPoints(ghPreviousPanel)
 ghPreviousPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
@@ -268,13 +318,14 @@ ghPreviousPanel.border = ghPreviousPanel:CreateTexture(nil, 'ARTWORK')
 ghPreviousPanel.border:SetAllPoints(ghPreviousPanel)
 ghPreviousPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
 local ghCooldownPanel = CreateFrame('Frame', 'ghCooldownPanel', UIParent)
-ghCooldownPanel:SetSize(64, 64)
 ghCooldownPanel:SetFrameStrata('BACKGROUND')
-ghCooldownPanel:Hide()
+ghCooldownPanel:SetSize(64, 64)
+ghCooldownPanel:SetMovable(true)
+ghCooldownPanel:SetUserPlaced(true)
 ghCooldownPanel:RegisterForDrag('LeftButton')
 ghCooldownPanel:SetScript('OnDragStart', ghCooldownPanel.StartMoving)
 ghCooldownPanel:SetScript('OnDragStop', ghCooldownPanel.StopMovingOrSizing)
-ghCooldownPanel:SetMovable(true)
+ghCooldownPanel:Hide()
 ghCooldownPanel.icon = ghCooldownPanel:CreateTexture(nil, 'BACKGROUND')
 ghCooldownPanel.icon:SetAllPoints(ghCooldownPanel)
 ghCooldownPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
@@ -297,11 +348,12 @@ ghCooldownPanel.text:SetJustifyV('CENTER')
 local ghInterruptPanel = CreateFrame('Frame', 'ghInterruptPanel', UIParent)
 ghInterruptPanel:SetFrameStrata('BACKGROUND')
 ghInterruptPanel:SetSize(64, 64)
-ghInterruptPanel:Hide()
+ghInterruptPanel:SetMovable(true)
+ghInterruptPanel:SetUserPlaced(true)
 ghInterruptPanel:RegisterForDrag('LeftButton')
 ghInterruptPanel:SetScript('OnDragStart', ghInterruptPanel.StartMoving)
 ghInterruptPanel:SetScript('OnDragStop', ghInterruptPanel.StopMovingOrSizing)
-ghInterruptPanel:SetMovable(true)
+ghInterruptPanel:Hide()
 ghInterruptPanel.icon = ghInterruptPanel:CreateTexture(nil, 'BACKGROUND')
 ghInterruptPanel.icon:SetAllPoints(ghInterruptPanel)
 ghInterruptPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
@@ -315,11 +367,12 @@ ghInterruptPanel.swipe:SetDrawEdge(false)
 local ghExtraPanel = CreateFrame('Frame', 'ghExtraPanel', UIParent)
 ghExtraPanel:SetFrameStrata('BACKGROUND')
 ghExtraPanel:SetSize(64, 64)
-ghExtraPanel:Hide()
+ghExtraPanel:SetMovable(true)
+ghExtraPanel:SetUserPlaced(true)
 ghExtraPanel:RegisterForDrag('LeftButton')
 ghExtraPanel:SetScript('OnDragStart', ghExtraPanel.StartMoving)
 ghExtraPanel:SetScript('OnDragStop', ghExtraPanel.StopMovingOrSizing)
-ghExtraPanel:SetMovable(true)
+ghExtraPanel:Hide()
 ghExtraPanel.icon = ghExtraPanel:CreateTexture(nil, 'BACKGROUND')
 ghExtraPanel.icon:SetAllPoints(ghExtraPanel)
 ghExtraPanel.icon:SetTexCoord(0.05, 0.95, 0.05, 0.95)
@@ -346,19 +399,22 @@ Player.target_modes = {
 		{1, ''},
 		{2, '2'},
 		{3, '3'},
-		{4, '4+'},
+		{4, '4'},
+		{5, '5+'},
 	},
 	[SPEC.MARKSMANSHIP] = {
 		{1, ''},
 		{2, '2'},
 		{3, '3'},
-		{4, '4+'},
+		{4, '4'},
+		{5, '5+'},
 	},
 	[SPEC.SURVIVAL] = {
 		{1, ''},
 		{2, '2'},
 		{3, '3'},
-		{4, '4+'},
+		{4, '4'},
+		{5, '5+'},
 	},
 }
 
@@ -366,7 +422,7 @@ function Player:SetTargetMode(mode)
 	if mode == self.target_mode then
 		return
 	end
-	self.target_mode = min(#self.target_modes[self.spec], mode)
+	self.target_mode = min(mode, #self.target_modes[self.spec])
 	self.enemies = self.target_modes[self.spec][self.target_mode][1]
 	ghPanel.text.br:SetText(self.target_modes[self.spec][self.target_mode][2])
 end
@@ -398,15 +454,7 @@ end
 
 -- Start Auto AoE
 
-local autoAoe = {
-	targets = {},
-	blacklist = {},
-	ignored_units = {
-		[120651] = true, -- Explosives (Mythic+ affix)
-	},
-}
-
-function autoAoe:Add(guid, update)
+function AutoAoe:Add(guid, update)
 	if self.blacklist[guid] then
 		return
 	end
@@ -422,7 +470,7 @@ function autoAoe:Add(guid, update)
 	end
 end
 
-function autoAoe:Remove(guid)
+function AutoAoe:Remove(guid)
 	-- blacklist enemies for 2 seconds when they die to prevent out of order events from re-adding them
 	self.blacklist[guid] = Player.time + 2
 	if self.targets[guid] then
@@ -431,13 +479,20 @@ function autoAoe:Remove(guid)
 	end
 end
 
-function autoAoe:Clear()
+function AutoAoe:Clear()
+	for _, ability in next, Abilities.autoAoe do
+		ability.auto_aoe.start_time = nil
+		for guid in next, ability.auto_aoe.targets do
+			ability.auto_aoe.targets[guid] = nil
+		end
+	end
 	for guid in next, self.targets do
 		self.targets[guid] = nil
 	end
+	self:Update()
 end
 
-function autoAoe:Update()
+function AutoAoe:Update()
 	local count = 0
 	for i in next, self.targets do
 		count = count + 1
@@ -456,7 +511,7 @@ function autoAoe:Update()
 	end
 end
 
-function autoAoe:Purge()
+function AutoAoe:Purge()
 	local update
 	for guid, t in next, self.targets do
 		if Player.time - t > Opt.auto_aoe_ttl then
@@ -478,16 +533,6 @@ end
 -- End Auto AoE
 
 -- Start Abilities
-
-local Ability = {}
-Ability.__index = Ability
-local abilities = {
-	all = {},
-	bySpellId = {},
-	velocity = {},
-	autoAoe = {},
-	trackAuras = {},
-}
 
 function Ability:Add(spellId, buff, player, spellId2)
 	local ability = {
@@ -511,12 +556,13 @@ function Ability:Add(spellId, buff, player, spellId2)
 		tick_interval = 0,
 		max_range = 40,
 		velocity = 0,
+		last_gained = 0,
 		last_used = 0,
-		auraTarget = buff and 'player' or 'target',
-		auraFilter = (buff and 'HELPFUL' or 'HARMFUL') .. (player and '|PLAYER' or '')
+		aura_target = buff and 'player' or 'target',
+		aura_filter = (buff and 'HELPFUL' or 'HARMFUL') .. (player and '|PLAYER' or '')
 	}
 	setmetatable(ability, self)
-	abilities.all[#abilities.all + 1] = ability
+	Abilities.all[#Abilities.all + 1] = ability
 	return ability
 end
 
@@ -557,7 +603,7 @@ function Ability:Remains()
 	end
 	local _, id, expires
 	for i = 1, 40 do
-		_, _, _, _, _, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
+		_, _, _, _, _, expires, _, _, _, id = UnitAura(self.aura_target, i, self.aura_filter)
 		if not id then
 			return 0
 		elseif self:Match(id) then
@@ -577,12 +623,12 @@ function Ability:Refreshable()
 	return self:Down()
 end
 
-function Ability:Up(condition)
-	return self:Remains(condition) > 0
+function Ability:Up(...)
+	return self:Remains(...) > 0
 end
 
-function Ability:Down(condition)
-	return self:Remains(condition) <= 0
+function Ability:Down(...)
+	return self:Remains(...) <= 0
 end
 
 function Ability:SetVelocity(velocity)
@@ -658,7 +704,7 @@ end
 function Ability:Stack()
 	local _, id, expires, count
 	for i = 1, 40 do
-		_, _, count, _, _, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
+		_, _, count, _, _, expires, _, _, _, id = UnitAura(self.aura_target, i, self.aura_filter)
 		if not id then
 			return 0
 		elseif self:Match(id) then
@@ -714,17 +760,17 @@ function Ability:Duration()
 end
 
 function Ability:Casting()
-	return Player.ability_casting == self
+	return Player.cast.ability == self
 end
 
 function Ability:Channeling()
-	return UnitChannelInfo('player') == self.name
+	return Player.channel.ability == self
 end
 
 function Ability:CastTime()
 	local _, _, _, castTime = GetSpellInfo(self.spellId)
 	if castTime == 0 then
-		return self.triggers_gcd and Player.gcd or 0
+		return 0
 	end
 	return castTime / 1000
 end
@@ -739,9 +785,9 @@ end
 
 function Ability:Previous(n)
 	local i = n or 1
-	if Player.ability_casting then
+	if Player.cast.ability then
 		if i == 1 then
-			return Player.ability_casting == self
+			return Player.cast.ability == self
 		end
 		i = i - 1
 	end
@@ -774,16 +820,18 @@ end
 function Ability:UpdateTargetsHit()
 	if self.auto_aoe.start_time and Player.time - self.auto_aoe.start_time >= 0.3 then
 		self.auto_aoe.start_time = nil
-		if self.auto_aoe.remove then
-			autoAoe:Clear()
-		end
 		self.auto_aoe.target_count = 0
+		if self.auto_aoe.remove then
+			for guid in next, AutoAoe.targets do
+				AutoAoe.targets[guid] = nil
+			end
+		end
 		for guid in next, self.auto_aoe.targets do
-			autoAoe:Add(guid)
+			AutoAoe:Add(guid)
 			self.auto_aoe.targets[guid] = nil
 			self.auto_aoe.target_count = self.auto_aoe.target_count + 1
 		end
-		autoAoe:Update()
+		AutoAoe:Update()
 	end
 end
 
@@ -792,10 +840,6 @@ function Ability:Targets()
 		return self.auto_aoe.target_count
 	end
 	return 0
-end
-
-function Ability:CastStart(dstGUID)
-	return
 end
 
 function Ability:CastFailed(dstGUID, missType)
@@ -812,10 +856,10 @@ function Ability:CastSuccess(dstGUID)
 		table.insert(Player.previous_gcd, 1, self)
 	end
 	if self.aura_targets and self.requires_react then
-		self:RemoveAura(self.auraTarget == 'player' and Player.guid or dstGUID)
+		self:RemoveAura(self.aura_target == 'player' and Player.guid or dstGUID)
 	end
 	if Opt.auto_aoe and self.auto_aoe and self.auto_aoe.trigger == 'SPELL_CAST_SUCCESS' then
-		autoAoe:Add(dstGUID, true)
+		AutoAoe:Add(dstGUID, true)
 	end
 	if self.requires_pet then
 		Player.pet.stuck = false
@@ -847,12 +891,12 @@ function Ability:CastLanded(dstGUID, event, missType)
 			end
 		end
 		if oldest then
-			Target.estimated_range = min(self.max_range, floor(self.velocity * max(0, Player.time - oldest.start)))
+			Target.estimated_range = floor(clamp(self.velocity * max(0, Player.time - oldest.start), 0, self.max_range))
 			self.traveling[oldest.guid] = nil
 		end
 	end
 	if self.range_est_start then
-		Target.estimated_range = floor(max(5, min(self.max_range, self.velocity * (Player.time - self.range_est_start))))
+		Target.estimated_range = floor(clamp(self.velocity * (Player.time - self.range_est_start), 5, self.max_range))
 		self.range_est_start = nil
 	elseif self.max_range < Target.estimated_range then
 		Target.estimated_range = self.max_range
@@ -867,7 +911,7 @@ end
 local trackAuras = {}
 
 function trackAuras:Purge()
-	for _, ability in next, abilities.trackAuras do
+	for _, ability in next, Abilities.trackAuras do
 		for guid, aura in next, ability.aura_targets do
 			if aura.expires <= Player.time then
 				ability:RemoveAura(guid)
@@ -877,7 +921,7 @@ function trackAuras:Purge()
 end
 
 function trackAuras:Remove(guid)
-	for _, ability in next, abilities.trackAuras do
+	for _, ability in next, Abilities.trackAuras do
 		ability:RemoveAura(guid)
 	end
 end
@@ -887,32 +931,32 @@ function Ability:TrackAuras()
 end
 
 function Ability:ApplyAura(guid)
-	if autoAoe.blacklist[guid] then
+	if AutoAoe.blacklist[guid] then
 		return
 	end
-	local aura = {
-		expires = Player.time + self:Duration()
-	}
+	local aura = {}
+	aura.expires = Player.time + self:Duration()
 	self.aura_targets[guid] = aura
+	return aura
 end
 
 function Ability:RefreshAura(guid)
-	if autoAoe.blacklist[guid] then
+	if AutoAoe.blacklist[guid] then
 		return
 	end
 	local aura = self.aura_targets[guid]
 	if not aura then
-		self:ApplyAura(guid)
-		return
+		return self:ApplyAura(guid)
 	end
 	local duration = self:Duration()
-	aura.expires = Player.time + min(duration * 1.3, (aura.expires - Player.time) + duration)
+	aura.expires = max(aura.expires, Player.time + min(duration * 1.3, (aura.expires - Player.time) + duration))
+	return aura
 end
 
 function Ability:RefreshAuraAll()
 	local duration = self:Duration()
 	for guid, aura in next, self.aura_targets do
-		aura.expires = Player.time + min(duration * 1.3, (aura.expires - Player.time) + duration)
+		aura.expires = max(aura.expires, Player.time + min(duration * 1.3, (aura.expires - Player.time) + duration))
 	end
 end
 
@@ -924,29 +968,149 @@ end
 
 -- End DoT tracking
 
+--[[
+Note: To get talent_node value for a talent, hover over talent and use macro:
+/dump GetMouseFocus():GetNodeID()
+]]
+
 -- Hunter Abilities
----- Multiple Specializations
-local CallPet = Ability:Add(883, false, true)
-local CounterShot = Ability:Add(147362, false, true)
-CounterShot.cooldown_duration = 24
-CounterShot.triggers_gcd = false
+---- Class
+------ Baseline
+local ArcaneShot = Ability:Add(185358, false, true)
+ArcaneShot.focus_cost = 40
+ArcaneShot:SetVelocity(70)
+local AspectOfTheCheetah = Ability:Add(186257, true, true, 186258)
+AspectOfTheCheetah.buff_duration = 3
+AspectOfTheCheetah.cooldown_duration = 180
+AspectOfTheCheetah.triggers_gcd = false
+local AspectOfTheTurtle = Ability:Add(186265, true, true)
+AspectOfTheTurtle.buff_duration = 8
+AspectOfTheTurtle.cooldown_duration = 180
+AspectOfTheTurtle.triggers_gcd = false
+local CallPet1 = Ability:Add(883, false, true)
+local Disengage = Ability:Add(781, false, true)
+Disengage.cooldown_duration = 20
+Disengage.triggers_gcd = false
+local DismissPet = Ability:Add(2641, false, true)
+local Exhilaration = Ability:Add(109304, true, true, 128594)
+Exhilaration.cooldown_duration = 120
+local FeignDeath = Ability:Add(5384, true, true)
+FeignDeath.buff_duration = 360
+FeignDeath.cooldown_duration = 30
+FeignDeath.triggers_gcd = false
+local Flare = Ability:Add(1543, false, true)
+Flare.cooldown_duration = 20
 local FreezingTrap = Ability:Add(187650, false, true, 3355)
 FreezingTrap.cooldown_duration = 25
 FreezingTrap.buff_duration = 60
-local KillShot = Ability:Add({320976, 53351}, false, true)
-KillShot.cooldown_duration = 10
-KillShot.focus_cost = 10
+local HuntersMark = Ability:Add(257284)
 local MendPet = Ability:Add(136, true, true)
 MendPet.cooldown_duration = 10
 MendPet.buff_duration = 10
 MendPet.requires_pet = true
-MendPet.auraTarget = 'pet'
+MendPet.aura_target = 'pet'
 local RevivePet = Ability:Add(982, false, true)
-RevivePet.focus_cost = 10
+RevivePet.focus_cost = 35
+local SteadyShot = Ability:Add(56641, false, true)
+SteadyShot:SetVelocity(75)
+local WingClip = Ability:Add(195645, false, true)
+WingClip.buff_duration = 15
+WingClip.focus_cost = 20
+------ Talents
+local AlphaPredator = Ability:Add(269737, false, true)
+local ArcticBola = Ability:Add(390231, false, true, 390232)
+ArcticBola.buff_duration = 3
+ArcticBola.ignore_immune = true
+ArcticBola:SetVelocity(35)
+ArcticBola:AutoAoe()
+local Barrage = Ability:Add(120360, false, true, 120361)
+Barrage.cooldown_duration = 20
+Barrage.focus_cost = 60
+Barrage:AutoAoe()
+local BindingShot = Ability:Add(109248, false, true, 117405)
+BindingShot.buff_duration = 10
+BindingShot.cooldown_duration = 45
+local Camouflage = Ability:Add(199483, true, true)
+Camouflage.buff_duration = 60
+Camouflage.cooldown_duration = 60
+local ConcussiveShot = Ability:Add(5116, false, true)
+ConcussiveShot.buff_duration = 6
+ConcussiveShot.cooldown_duration = 5
+ConcussiveShot:SetVelocity(50)
+local CounterShot = Ability:Add(147362, false, true)
+CounterShot.buff_duration = 3
+CounterShot.cooldown_duration = 24
+CounterShot.triggers_gcd = false
+local DeathChakram = Ability:Add(375891, false, true, 375893)
+DeathChakram.buff_duration = 10
+DeathChakram.cooldown_duration = 45
+DeathChakram:SetVelocity(30)
+DeathChakram:AutoAoe()
+local ExplosiveShot = Ability:Add(212431, false, true)
+ExplosiveShot.buff_duration = 3
+ExplosiveShot.cooldown_duration = 30
+ExplosiveShot.focus_cost = 20
+ExplosiveShot:SetVelocity(75)
+ExplosiveShot.explosion = Ability:Add(212680, false, true)
+ExplosiveShot.explosion:AutoAoe()
+local HighExplosiveTrap = Ability:Add(236776, false, true, 236777)
+HighExplosiveTrap.cooldown_duration = 40
+local HydrasBite = Ability:Add(260241, false, true)
+local Intimidation = Ability:Add(19577, false, true, 24394)
+Intimidation.cooldown_duration = 60
+Intimidation.buff_duration = 5
+Intimidation.requires_pet = true
+local KillerInstinct = Ability:Add(273887, false, true)
+local KillShot = Ability:Add({320976, 53351}, false, true)
+KillShot.cooldown_duration = 10
+KillShot.focus_cost = 10
+KillShot:SetVelocity(80)
+local LatentPoison = Ability:Add(378015, false, true)
+LatentPoison.buff_duration = 15
+local MasterMarksman = Ability:Add(260309, false, true, 269576)
+MasterMarksman.buff_duration = 6
+MasterMarksman.tick_interval = 2
+local Misdirection = Ability:Add(34477, true, true)
+Misdirection.buff_duration = 30
+Misdirection.cooldown_duration = 30
+local PoisonInjection = Ability:Add(378014, false, true)
+local ScareBeast = Ability:Add(1513)
+ScareBeast.buff_duration = 20
+ScareBeast.focus_cost = 25
+local ScatterShot = Ability:Add(213691, false, true)
+ScatterShot.buff_duration = 4
+ScatterShot.cooldown_duration = 30
+ScatterShot:SetVelocity(60)
+local SerpentSting = Ability:Add(271788, false, true)
+SerpentSting.focus_cost = 10
+SerpentSting.buff_duration = 18
+SerpentSting.tick_interval = 3
+SerpentSting.hasted_ticks = true
+SerpentSting:SetVelocity(45)
+SerpentSting:AutoAoe(false, 'apply')
+SerpentSting:TrackAuras()
+local SteelTrap = Ability:Add(162488, false, true, 162487)
+SteelTrap.cooldown_duration = 30
+SteelTrap.buff_duration = 20
+SteelTrap.tick_interval = 2
+SteelTrap.hasted_ticks = true
+local SurvivalOfTheFittest = Ability:Add(264735, true, true)
+SurvivalOfTheFittest.buff_duration = 6
+SurvivalOfTheFittest.cooldown_duration = 180
+SurvivalOfTheFittest.triggers_gcd = false
 local TarTrap = Ability:Add(187698, false, true, 135299)
 TarTrap.cooldown_duration = 30
 TarTrap.buff_duration = 30
+TarTrap.ignore_immune = true
+local TranquilizingShot = Ability:Add(19801, false, true)
+TranquilizingShot.cooldown_duration = 10
+TranquilizingShot:SetVelocity(50)
+local Stampede = Ability:Add(201430, true, true)
+Stampede.buff_duration = 12
+Stampede.cooldown_duration = 120
 ------ Procs
+
+---- Beast Mastery
 
 ------ Talents
 local AMurderOfCrows = Ability:Add(131894, false, true, 131900)
@@ -955,7 +1119,6 @@ AMurderOfCrows.buff_duration = 15
 AMurderOfCrows.focus_cost = 30
 AMurderOfCrows.tick_interval = 1
 AMurderOfCrows.hasted_ticks = true
----- Beast Mastery
 local AspectOfTheWild = Ability:Add(193530, true, true)
 AspectOfTheWild.cooldown_duration = 120
 AspectOfTheWild.buff_duration = 20
@@ -968,7 +1131,7 @@ BarbedShot.requires_charge = true
 BarbedShot:SetVelocity(50)
 BarbedShot.buff = Ability:Add(246152, true, true)
 BarbedShot.buff.buff_duration = 8
-local BeastCleave = Ability:Add(268877, true, true)
+local BeastCleave = Ability:Add(115939, true, true)
 BeastCleave.buff_duration = 4
 BeastCleave.pet = Ability:Add(118455, false, true, 118459)
 BeastCleave.pet:AutoAoe()
@@ -976,47 +1139,34 @@ local BestialWrath = Ability:Add(19574, true, true)
 BestialWrath.cooldown_duration = 90
 BestialWrath.buff_duration = 15
 BestialWrath.pet = Ability:Add(186254, true, true)
-BestialWrath.pet.auraTarget = 'pet'
+BestialWrath.pet.aura_target = 'pet'
 BestialWrath.pet.buff_duration = 15
 local CobraShot = Ability:Add(193455, false, true)
 CobraShot.focus_cost = 35
 CobraShot:SetVelocity(45)
+local HuntersPrey = Ability:Add(378210, true, true, 378215)
+HuntersPrey.buff_duration = 15
+local KillCleave = Ability:Add(378207, false, true)
 local KillCommandBM = Ability:Add(34026, false, true, 83381)
 KillCommandBM.focus_cost = 30
 KillCommandBM.cooldown_duration = 7.5
 KillCommandBM.hasted_cooldown = true
 KillCommandBM.requires_pet = true
 KillCommandBM.max_range = 50
+local KillerCobra = Ability:Add(199532, true, true)
 local MultiShotBM = Ability:Add(2643, false, true)
 MultiShotBM.focus_cost = 40
 MultiShotBM:SetVelocity(50)
 MultiShotBM:AutoAoe(true)
+local OneWithThePack = Ability:Add(199528, true, true)
 local PetFrenzy = Ability:Add(272790, true, true)
-PetFrenzy.auraTarget = 'pet'
+PetFrenzy.aura_target = 'pet'
 PetFrenzy.buff_duration = 8
------- Talents
-local Barrage = Ability:Add(120360, false, true, 120361)
-Barrage.cooldown_duration = 20
-Barrage.focus_cost = 60
-Barrage:AutoAoe(true)
-local ChimaeraShot = Ability:Add(53209, false, true)
-ChimaeraShot.cooldown_duration = 15
-ChimaeraShot.hasted_cooldown = true
-ChimaeraShot:SetVelocity(40)
-local DireBeast = Ability:Add(120679, true, true, 281036)
-DireBeast.cooldown_duration = 20
-DireBeast.buff_duration = 8
-local KillerInstinct = Ability:Add(273887, false, true)
-local OneWithThePack = Ability:Add(199528, false, true)
-local Stampede = Ability:Add(201430, false, true, 201594)
-Stampede.cooldown_duration = 180
-Stampede.buff_duration = 12
-Stampede:AutoAoe()
-local SpittingCobra = Ability:Add(194407, true, true)
-SpittingCobra.cooldown_duration = 90
-SpittingCobra.buff_duration = 20
+local ScentOfBlood = Ability:Add(193532, true, true)
 local Stomp = Ability:Add(199530, false, true, 201754)
-Stomp:AutoAoe(true)
+Stomp:AutoAoe()
+local WildCall = Ability:Add(185789, true, true, 185791)
+WildCall.buff_duration = 4
 ------ Procs
 
 ---- Marksmanship
@@ -1026,23 +1176,59 @@ Stomp:AutoAoe(true)
 ------ Procs
 
 ---- Survival
+
+------ Talents
+local AspectOfTheEagle = Ability:Add(186289, true, true)
+AspectOfTheEagle.buff_duration = 15
+AspectOfTheEagle.cooldown_duration = 90
+local BirdsOfPrey = Ability:Add(260331, false, true)
+local Bloodseeker = Ability:Add(260248, false, true, 259277)
+Bloodseeker.buff_duration = 8
+Bloodseeker.tick_interval = 2
+Bloodseeker.hasted_ticks = true
+Bloodseeker:TrackAuras()
+Bloodseeker.buff = Ability:Add(260249, true, true)
+local Bombardier = Ability:Add(389880, false, true)
+local Butchery = Ability:Add(212436, false, true)
+Butchery.focus_cost = 30
+Butchery.cooldown_duration = 9
+Butchery.hasted_cooldown = true
+Butchery.requires_charge = true
+Butchery:AutoAoe(true)
 local Carve = Ability:Add(187708, false, true)
+Carve.cooldown_duration = 6
 Carve.focus_cost = 35
 Carve.max_range = 5
+Carve.hasted_cooldown = true
 Carve:AutoAoe(true)
-local CoordinatedAssault = Ability:Add(266779, true, true)
+local CoordinatedAssault = Ability:Add(360952, true, true)
 CoordinatedAssault.cooldown_duration = 120
 CoordinatedAssault.buff_duration = 20
 CoordinatedAssault.requires_pet = true
+CoordinatedAssault.empower = Ability:Add(361738, true, true)
+CoordinatedAssault.empower.buff_duration = 3
+local CoordinatedKill = Ability:Add(385739, false, true)
+local DeadlyDuo = Ability:Add(378962, true, true, 397568)
+DeadlyDuo.buff_duration = 12
+local FlankersAdvantage = Ability:Add(263186, false, true)
+local FlankingStrike = Ability:Add(269751, false, true, 269752)
+FlankingStrike.cooldown_duration = 30
+FlankingStrike.requires_pet = true
+FlankingStrike.max_range = 5
+local FuryOfTheEagle = Ability:Add(203415, true, true, 203413)
+FuryOfTheEagle.buff_duration = 4
+FuryOfTheEagle.cooldown_duration = 45
+FuryOfTheEagle:AutoAoe()
+local GuerrillaTactics = Ability:Add(264332, false, true)
 local Harpoon = Ability:Add(190925, false, true, 190927)
-Harpoon.cooldown_duration = 20
+Harpoon.cooldown_duration = 30
 Harpoon.buff_duration = 3
 Harpoon.triggers_gcd = false
 Harpoon.max_range = 30
-local Intimidation = Ability:Add(19577, false, true)
-Intimidation.cooldown_duration = 60
-Intimidation.buff_duration = 5
-Intimidation.requires_pet = true
+local InternalBleeding = Ability:Add(270343, false, true) -- Shrapnel Bomb DoT applied by Raptor Strike/Mongoose Bite/Carve
+InternalBleeding.buff_duration = 9
+InternalBleeding.tick_interval = 3
+InternalBleeding.hasted_ticks = true
 local KillCommand = Ability:Add(259489, false, true)
 KillCommand.focus_cost = -15
 KillCommand.cooldown_duration = 6
@@ -1051,60 +1237,15 @@ KillCommand.requires_charge = true
 KillCommand.requires_pet = true
 KillCommand.max_range = 50
 KillCommand:AutoAoe(false, 'cast')
-local Muzzle = Ability:Add(187707, false, true)
-Muzzle.cooldown_duration = 15
-Muzzle.max_range = 5
-Muzzle.triggers_gcd = false
-local RaptorStrike = Ability:Add(186270, false, true)
-RaptorStrike.focus_cost = 30
-RaptorStrike.max_range = 5
-local SerpentSting = Ability:Add(259491, false, true)
-SerpentSting.focus_cost = 20
-SerpentSting.buff_duration = 12
-SerpentSting.tick_interval = 3
-SerpentSting.hasted_ticks = true
-SerpentSting:SetVelocity(60)
-SerpentSting:AutoAoe(false, 'apply')
-SerpentSting:TrackAuras()
-local WildfireBomb = Ability:Add(259495, false, true, 269747)
-WildfireBomb.cooldown_duration = 18
-WildfireBomb.buff_duration = 6
-WildfireBomb.tick_interval = 1
-WildfireBomb.hasted_cooldown = true
-WildfireBomb.requires_charge = true
-WildfireBomb:SetVelocity(30)
-WildfireBomb:AutoAoe(false, 'apply')
------- Talents
-local AlphaPredator = Ability:Add(269737, false, true)
-local BirdsOfPrey = Ability:Add(260331, false, true)
-local Bloodseeker = Ability:Add(260248, false, true, 259277)
-Bloodseeker.buff_duration = 8
-Bloodseeker.tick_interval = 2
-Bloodseeker.hasted_ticks = true
-Bloodseeker:TrackAuras()
-local Butchery = Ability:Add(212436, false, true)
-Butchery.focus_cost = 30
-Butchery.cooldown_duration = 9
-Butchery.hasted_cooldown = true
-Butchery.requires_charge = true
-Butchery:AutoAoe(true)
-local Chakrams = Ability:Add(259391, false, true, 259398)
-Chakrams.focus_cost = 30
-Chakrams.cooldown_duration = 20
-Chakrams:SetVelocity(30)
-local FlankingStrike = Ability:Add(269751, false, true)
-FlankingStrike.focus_cost = -30
-FlankingStrike.cooldown_duration = 40
-FlankingStrike.requires_pet = true
-FlankingStrike.max_range = 5
-local GuerrillaTactics = Ability:Add(264332, false, true)
-local HydrasBite = Ability:Add(260241, false, true)
-local InternalBleeding = Ability:Add(270343, false, true) -- Shrapnel Bomb DoT applied by Raptor Strike/Mongoose Bite/Carve
 local MongooseBite = Ability:Add(259387, false, true)
 MongooseBite.focus_cost = 30
 MongooseBite.max_range = 5
 local MongooseFury = Ability:Add(259388, true, true)
 MongooseFury.buff_duration = 14
+local Muzzle = Ability:Add(187707, false, true) -- Replaces Counter-Shot
+Muzzle.cooldown_duration = 15
+Muzzle.max_range = 5
+Muzzle.triggers_gcd = false
 local PheromoneBomb = Ability:Add(270323, false, true, 270332) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
 PheromoneBomb.cooldown_duration = 18
 PheromoneBomb.buff_duration = 6
@@ -1113,7 +1254,9 @@ PheromoneBomb.hasted_cooldown = true
 PheromoneBomb.requires_charge = true
 PheromoneBomb:SetVelocity(30)
 PheromoneBomb:AutoAoe(false, 'apply')
-local Predator = Ability:Add(260249, true, true) -- Bloodseeker buff
+local RaptorStrike = Ability:Add(186270, false, true)
+RaptorStrike.focus_cost = 30
+RaptorStrike.max_range = 5
 local ShrapnelBomb = Ability:Add(270335, false, true, 270339) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
 ShrapnelBomb.cooldown_duration = 18
 ShrapnelBomb.buff_duration = 6
@@ -1122,69 +1265,46 @@ ShrapnelBomb.hasted_cooldown = true
 ShrapnelBomb.requires_charge = true
 ShrapnelBomb:SetVelocity(30)
 ShrapnelBomb:AutoAoe(false, 'apply')
-local SteelTrap = Ability:Add(162488, false, true, 162487)
-SteelTrap.cooldown_duration = 30
-SteelTrap.buff_duration = 20
-SteelTrap.tick_interval = 2
-SteelTrap.hasted_ticks = true
+local Spearhead = Ability:Add(360966, true, true)
+Spearhead.buff_duration = 12
+Spearhead.cooldown_duration = 90
+Spearhead.bleed = Ability:Add(389881, false, true)
+Spearhead.bleed.buff_duration = 4
+Spearhead.bleed.tick_interval = 2
 local TermsOfEngagement = Ability:Add(265895, true, true, 265898)
 TermsOfEngagement.buff_duration = 10
 local TipOfTheSpear = Ability:Add(260285, true, true, 260286)
 TipOfTheSpear.buff_duration = 10
-local VipersVenom = Ability:Add(268501, true, true, 268552)
-VipersVenom.buff_duration = 8
+local VipersVenom = Ability:Add(268501, false, true)
 local VolatileBomb = Ability:Add(271045, false, true, 271049) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
 VolatileBomb.cooldown_duration = 18
 VolatileBomb.buff_duration = 6
 VolatileBomb.tick_interval = 1
 VolatileBomb.hasted_cooldown = true
 VolatileBomb.requires_charge = true
-VolatileBomb:SetVelocity(30)
+VolatileBomb:SetVelocity(35)
 VolatileBomb:AutoAoe(false, 'apply')
+local WildfireBomb = Ability:Add(259495, false, true, 269747)
+WildfireBomb.cooldown_duration = 18
+WildfireBomb.buff_duration = 6
+WildfireBomb.tick_interval = 1
+WildfireBomb.hasted_cooldown = true
+WildfireBomb.requires_charge = true
+WildfireBomb:SetVelocity(30)
+WildfireBomb:AutoAoe(false, 'apply')
 local WildfireInfusion = Ability:Add(271014, false, true)
 ------ Procs
 
--- Covenant abilities
-local DeathChakram = Ability:Add(325028, false, true) -- Necrolord
-DeathChakram.cooldown_duration = 45
-DeathChakram:AutoAoe()
-local FlayedShot = Ability:Add(324149, false, true) -- Venthyr
-FlayedShot.cooldown_duration = 30
-FlayedShot.buff_duration = 18
-FlayedShot.tick_interval = 2
-local FlayersMark = Ability:Add(324156, true, true) -- triggered by Flayed Shot ticks
-FlayersMark.buff_duration = 12
-local ResonatingArrow = Ability:Add(308491, false, true, 308498) -- Kyrian
-ResonatingArrow.cooldown_duration = 60
-ResonatingArrow.buff_duration = 10
-ResonatingArrow:AutoAoe(false, 'apply')
-local SummonSteward = Ability:Add(324739, false, true) -- Kyrian
-SummonSteward.cooldown_duration = 300
-local WildSpirits = Ability:Add(328231, false, true) -- Night Fae
-WildSpirits.cooldown_duration = 120
-local WildMark = Ability:Add(328275, false, true) -- triggered by Wild Spirits
-WildMark.buff_duration = 15
-WildMark:AutoAoe(false, 'apply')
--- Soulbind conduits
+-- Tier bonuses
+local ExposedWound = Ability:Add(410147, true, true) -- Survival T30 2pc
+ExposedWound.buff_duration = 12
+local ShreddedArmor = Ability:Add(410167, false, true) -- Survival T30 4pc
+ShreddedArmor.buff_duration = 8
+-- PvP talents
 
--- Legendary effects
-local LatentPoisonInjectors = Ability:Add(336902, false, true, 336903)
-LatentPoisonInjectors.buff_duration = 15
-LatentPoisonInjectors.bonus_id = 7017
-local NesingwarysTrappingApparatus = Ability:Add(336743, true, true, 336744)
-NesingwarysTrappingApparatus.buff_duration = 5
-NesingwarysTrappingApparatus.bonus_id = 7004
-local RylakstalkersConfoundingStrikes = Ability:Add(336901, true, true)
-RylakstalkersConfoundingStrikes.bonus_id = 7016
-local Unity = Ability:Add(364743, true, true)
-Unity.bonus_id = 8122
--- Tier effects
-local MadBombardier = Ability:Add(364490, true, true, 363805)
-MadBombardier.buff_duration = 20
-MadBombardier:TrackAuras()
 -- Racials
 
--- Trinket Effects
+-- Trinket effects
 
 -- End Abilities
 
@@ -1251,67 +1371,22 @@ function InventoryItem:Usable(seconds)
 end
 
 -- Inventory Items
-local EternalAugmentRune = InventoryItem:Add(190384)
-EternalAugmentRune.buff = Ability:Add(367405, true, true)
-local EternalFlask = InventoryItem:Add(171280)
-EternalFlask.buff = Ability:Add(307166, true, true)
-local PhialOfSerenity = InventoryItem:Add(177278) -- Provided by Summon Steward
-PhialOfSerenity.max_charges = 3
-local PotionOfPhantomFire = InventoryItem:Add(171349)
-PotionOfPhantomFire.buff = Ability:Add(307495, true, true)
-local PotionOfSpectralAgility = InventoryItem:Add(171270)
-PotionOfSpectralAgility.buff = Ability:Add(307159, true, true)
-local SpectralFlaskOfPower = InventoryItem:Add(171276)
-SpectralFlaskOfPower.buff = Ability:Add(307185, true, true)
+
 -- Equipment
 local Trinket1 = InventoryItem:Add(0)
 local Trinket2 = InventoryItem:Add(0)
-Trinket.BottledFlayedwingToxin = InventoryItem:Add(178742)
-Trinket.BottledFlayedwingToxin.buff = Ability:Add(345545, true, true)
-Trinket.SoleahsSecretTechnique = InventoryItem:Add(190958)
-Trinket.SoleahsSecretTechnique.buff = Ability:Add(368512, true, true)
+local DragonfireBombDispenser = InventoryItem:Add(202610)
+local ElementiumPocketAnvil = InventoryItem:Add(202617)
 -- End Inventory Items
 
 -- Start Player API
 
-function Player:Health()
-	return self.health.current
-end
-
-function Player:HealthMax()
-	return self.health.max
-end
-
-function Player:HealthPct()
-	return self.health.current / self.health.max * 100
-end
-
-function Player:Focus()
-	return self.focus.current
-end
-
-function Player:FocusDeficit()
-	return self.focus.max - self.focus.current
-end
-
-function Player:FocusRegen()
-	return self.focus.regen
-end
-
-function Player:FocusMax()
-	return self.focus.max
-end
-
-function Player:FocusTimeToMax()
-	local deficit = self.focus.max - self.focus.current
+function Player:FocusTimeToMax(focus)
+	local deficit = (focus or self.focus.max) - self.focus.current
 	if deficit <= 0 then
 		return 0
 	end
 	return deficit / self.focus.regen
-end
-
-function Player:HasteFactor()
-	return self.haste_factor
 end
 
 function Player:ResetSwing(mainHand, offHand, missed)
@@ -1329,6 +1404,9 @@ end
 function Player:TimeInCombat()
 	if self.combat_start > 0 then
 		return self.time - self.combat_start
+	end
+	if self.cast.ability and self.cast.ability.triggers_combat then
+		return 0.1
 	end
 	return 0
 end
@@ -1354,10 +1432,8 @@ function Player:BloodlustActive()
 			id == 90355 or  -- Ancient Hysteria (Hunter Pet - Core Hound)
 			id == 160452 or -- Netherwinds (Hunter Pet - Nether Ray)
 			id == 264667 or -- Primal Rage (Hunter Pet - Ferocity)
-			id == 178207 or -- Drums of Fury (Leatherworking)
-			id == 146555 or -- Drums of Rage (Leatherworking)
-			id == 230935 or -- Drums of the Mountain (Leatherworking)
-			id == 256740    -- Drums of the Maelstrom (Leatherworking)
+			id == 381301 or -- Feral Hide Drums (Leatherworking)
+			id == 390386    -- Fury of the Aspects (Evoker)
 		) then
 			return true
 		end
@@ -1365,10 +1441,7 @@ function Player:BloodlustActive()
 end
 
 function Player:Equipped(itemID, slot)
-	if slot then
-		return GetInventoryItemID('player', slot) == itemID, slot
-	end
-	for i = 1, 19 do
+	for i = (slot or 1), (slot or 19) do
 		if GetInventoryItemID('player', i) == itemID then
 			return true, i
 		end
@@ -1376,9 +1449,9 @@ function Player:Equipped(itemID, slot)
 	return false
 end
 
-function Player:BonusIdEquipped(bonusId)
+function Player:BonusIdEquipped(bonusId, slot)
 	local link, item
-	for i = 1, 19 do
+	for i = (slot or 1), (slot or 19) do
 		link = GetInventoryItemLink('player', i)
 		if link then
 			item = link:match('Hitem:%d+:([%d:]+)')
@@ -1407,44 +1480,36 @@ function Player:UpdateTime(timeStamp)
 end
 
 function Player:UpdateAbilities()
-	self.rescan_abilities = false
-	self.focus.max = UnitPowerMax('player', 2)
-
 	local node
-	for _, ability in next, abilities.all do
+	local configId = C_ClassTalents.GetActiveConfigID()
+	for _, ability in next, Abilities.all do
 		ability.known = false
+		ability.rank = 0
 		for _, spellId in next, ability.spellIds do
 			ability.spellId, ability.name, _, ability.icon = spellId, GetSpellInfo(spellId)
-			if IsPlayerSpell(spellId) then
+			if IsPlayerSpell(spellId) or (ability.learn_spellId and IsPlayerSpell(ability.learn_spellId)) then
 				ability.known = true
 				break
 			end
 		end
-		if C_LevelLink.IsSpellLocked(ability.spellId) then
-			ability.known = false -- spell is locked, do not mark as known
-		end
-		if ability.bonus_id then -- used for checking Legendary crafted effects
+		if ability.bonus_id then -- used for checking enchants and crafted effects
 			ability.known = self:BonusIdEquipped(ability.bonus_id)
 		end
-		if ability.conduit_id then
-			node = C_Soulbinds.FindNodeIDActuallyInstalled(C_Soulbinds.GetActiveSoulbindID(), ability.conduit_id)
+		if ability.talent_node and configId then
+			node = C_Traits.GetNodeInfo(configId, ability.talent_node)
 			if node then
-				node = C_Soulbinds.GetNode(node)
-				if node then
-					if node.conduitID == 0 then
-						self.rescan_abilities = true -- rescan on next target, conduit data has not finished loading
-					else
-						ability.known = node.state == 3
-						ability.rank = node.conduitRank
-					end
-				end
+				ability.rank = node.activeRank
+				ability.known = ability.rank > 0
 			end
+		end
+		if C_LevelLink.IsSpellLocked(ability.spellId) or (ability.check_usable and not IsUsableSpell(ability.spellId)) then
+			ability.known = false -- spell is locked, do not mark as known
 		end
 	end
 
-	if Butchery.known then
-		Carve.known = false
-	end
+	Bloodseeker.buff.known = Bloodseeker.known
+	ExplosiveShot.explosion.known = ExplosiveShot.known
+	LatentPoison.known = PoisonInjection.known
 	if MongooseBite.known then
 		MongooseFury.known = true
 		RaptorStrike.known = false
@@ -1455,48 +1520,29 @@ function Player:UpdateAbilities()
 		VolatileBomb.known = true
 		InternalBleeding.known = true
 	end
-	if Bloodseeker.known then
-		Predator.known = true
-	end
-	if BarbedShot.known then
-		BarbedShot.buff.known = true
-		PetFrenzy.known = true
-	end
-	if BestialWrath.known then
-		BestialWrath.pet.known = true
-	end
-	if MultiShotBM.known then
-		BeastCleave.known = true
-		BeastCleave.pet.known = true
-	end
-	if FlayedShot.known then
-		FlayersMark.known = true
-	end
-	if WildSpirits.known then
-		WildMark.known = true
-	end
-	if Player.spec == SPEC.SURVIVAL and Player.set_bonus.t28 >= 2 then
-		MadBombardier.known = true
+	if Player.spec == SPEC.SURVIVAL then
+		ExposedWound.known = Player.set_bonus.t30 >= 2
+		ShreddedArmor.known = Player.set_bonus.t30 >= 4
 	end
 
-	wipe(abilities.bySpellId)
-	wipe(abilities.velocity)
-	wipe(abilities.autoAoe)
-	wipe(abilities.trackAuras)
-	for _, ability in next, abilities.all do
+	wipe(Abilities.bySpellId)
+	wipe(Abilities.velocity)
+	wipe(Abilities.autoAoe)
+	wipe(Abilities.trackAuras)
+	for _, ability in next, Abilities.all do
 		if ability.known then
-			abilities.bySpellId[ability.spellId] = ability
+			Abilities.bySpellId[ability.spellId] = ability
 			if ability.spellId2 then
-				abilities.bySpellId[ability.spellId2] = ability
+				Abilities.bySpellId[ability.spellId2] = ability
 			end
 			if ability.velocity > 0 then
-				abilities.velocity[#abilities.velocity + 1] = ability
+				Abilities.velocity[#Abilities.velocity + 1] = ability
 			end
 			if ability.auto_aoe then
-				abilities.autoAoe[#abilities.autoAoe + 1] = ability
+				Abilities.autoAoe[#Abilities.autoAoe + 1] = ability
 			end
 			if ability.aura_targets then
-				abilities.trackAuras[#abilities.trackAuras + 1] = ability
+				Abilities.trackAuras[#Abilities.trackAuras + 1] = ability
 			end
 		end
 	end
@@ -1523,45 +1569,60 @@ function Player:UpdatePet()
 end
 
 function Player:Update()
-	local _, start, duration, remains, spellId
+	local _, start, ends, duration, spellId, speed_mh, speed_oh
 	self.main =  nil
 	self.cd = nil
 	self.interrupt = nil
 	self.extra = nil
-	self.wait_time = nil
+	self.pool_focus = nil
 	self:UpdateTime()
-	start, duration = GetSpellCooldown(61304)
-	self.gcd_remains = start > 0 and duration - (self.ctime - start) or 0
-	_, _, _, _, remains, _, _, _, spellId = UnitCastingInfo('player')
-	self.ability_casting = abilities.bySpellId[spellId]
-	self.cast_remains = remains and (remains / 1000 - self.ctime) or 0
-	self.execute_remains = max(self.cast_remains, self.gcd_remains)
 	self.haste_factor = 1 / (1 + UnitSpellHaste('player') / 100)
 	self.gcd = 1.5 * self.haste_factor
-	self.health.current = UnitHealth('player')
-	self.health.max = UnitHealthMax('player')
-	self.focus.regen = GetPowerRegen()
-	self.focus.current = UnitPower('player', 2) + (self.focus.regen * self.execute_remains)
-	if self.ability_casting then
-		self.focus.current = self.focus.current - self.ability_casting:Cost()
+	start, duration = GetSpellCooldown(61304)
+	self.gcd_remains = start > 0 and duration - (self.ctime - start) or 0
+	_, _, _, start, ends, _, _, _, spellId = UnitCastingInfo('player')
+	if spellId then
+		self.cast.ability = Abilities.bySpellId[spellId]
+		self.cast.start = start / 1000
+		self.cast.ends = ends / 1000
+	else
+		self.cast.ability = nil
+		self.cast.start = 0
+		self.cast.ends = 0
 	end
-	self.focus.current = max(0, min(self.focus.max, self.focus.current))
+	self.execute_remains = max(self.cast.ends - self.ctime, self.gcd_remains)
+	self.focus.regen = GetPowerRegenForPowerType(2)
+	self.focus.max = UnitPowerMax('player', 2)
+	self.focus.current = UnitPower('player', 2) + (self.focus.regen * self.execute_remains)
+	if self.cast.ability then
+		self.focus.current = self.focus.current - self.cast.ability:Cost()
+	end
+	self.focus.current = clamp(self.focus.current, 0, self.focus.max)
+	self.focus.deficit = self.focus.max - self.focus.current
+	speed_mh, speed_oh = UnitAttackSpeed('player')
+	self.swing.mh.speed = speed_mh or 0
+	self.swing.oh.speed = speed_oh or 0
+	self.swing.mh.remains = max(0, self.swing.mh.last + self.swing.mh.speed - self.time)
+	self.swing.oh.remains = max(0, self.swing.oh.last + self.swing.oh.speed - self.time)
 	self.moving = GetUnitSpeed('player') ~= 0
 	self:UpdateThreat()
 	self:UpdatePet()
 
 	trackAuras:Purge()
 	if Opt.auto_aoe then
-		for _, ability in next, abilities.autoAoe do
+		for _, ability in next, Abilities.autoAoe do
 			ability:UpdateTargetsHit()
 		end
-		autoAoe:Purge()
+		AutoAoe:Purge()
 	end
+
+	self.main = APL[self.spec]:Main()
 end
 
 function Player:Init()
 	local _
 	if #UI.glows == 0 then
+		UI:DisableOverlayGlows()
 		UI:CreateOverlayGlows()
 		UI:HookResourceFrame()
 	end
@@ -1570,8 +1631,8 @@ function Player:Init()
 	self.name = UnitName('player')
 	self.level = UnitLevel('player')
 	_, self.instance = IsInInstance()
-	events:GROUP_ROSTER_UPDATE()
-	events:PLAYER_SPECIALIZATION_CHANGED('player')
+	Events:GROUP_ROSTER_UPDATE()
+	Events:PLAYER_SPECIALIZATION_CHANGED('player')
 end
 
 -- End Player API
@@ -1579,7 +1640,7 @@ end
 -- Start Target API
 
 function Target:UpdateHealth(reset)
-	timer.health = 0
+	Timer.health = 0
 	self.health.current = UnitHealth('target')
 	self.health.max = UnitHealthMax('target')
 	if self.health.current <= 0 then
@@ -1651,10 +1712,7 @@ function Target:Update()
 end
 
 function Target:Stunned()
-	if Intimidation:Up() then
-		return true
-	end
-	return false
+	return Intimidation:Up()
 end
 
 -- End Target API
@@ -1674,25 +1732,23 @@ function SerpentSting:CastLanded(dstGUID, event)
 end
 
 function SerpentSting:Remains()
-	local remains = Ability.Remains(self)
-	if VolatileBomb.known and VolatileBomb:Traveling() > 0 and remains > 0 then
+	if VolatileBomb.known and VolatileBomb:Traveling() > 0 then
 		return self:Duration()
 	end
-	return remains
-end
-
-function SerpentSting:Cost()
-	if VipersVenom:Up() then
-		return 0
-	end
-	return Ability.Cost(self)
+	return Ability.Remains(self)
 end
 
 function KillShot:Usable()
-	if (not FlayersMark.known or FlayersMark:Down()) and Target.health.pct >= 20 then
+	if not Ability.Usable(self) then
 		return false
 	end
-	return Ability.Usable(self)
+	if Target.health.pct < 20 then
+		return true
+	end
+	if HuntersPrey.known and HuntersPrey:Up() then
+		return true
+	end
+	return false
 end
 
 -- hack to support Wildfire Bomb's changing spells on each cast
@@ -1720,7 +1776,7 @@ function WildfireInfusion:Update()
 	end
 end
 
-function CallPet:Usable()
+function CallPet1:Usable()
 	if Player.pet.active then
 		return false
 	end
@@ -1731,7 +1787,7 @@ function MendPet:Usable()
 	if not Ability.Usable(self) then
 		return false
 	end
-	if Opt.mend_threshold == 0 then
+	if Opt.mend_threshold <= 0 then
 		return false
 	end
 	if (UnitHealth('pet') / UnitHealthMax('pet') * 100) >= Opt.mend_threshold then
@@ -1750,7 +1806,7 @@ end
 function PetFrenzy:StartDurationStack()
 	local _, id, duration, expires, stack
 	for i = 1, 40 do
-		_, _, stack, _, duration, expires, _, _, _, id = UnitAura(self.auraTarget, i, self.auraFilter)
+		_, _, stack, _, duration, expires, _, _, _, id = UnitAura(self.aura_target, i, self.aura_filter)
 		if not id then
 			return 0, 0, 0
 		elseif self:Match(id) then
@@ -1758,32 +1814,6 @@ function PetFrenzy:StartDurationStack()
 		end
 	end
 	return 0, 0, 0
-end
-
-function MadBombardier:Remains()
-	if self.consumed then
-		return 0
-	end
-	return Ability.Remains(self)
-end
-
-function MadBombardier:ApplyAura(...)
-	Ability.ApplyAura(self, ...)
-	self.consumed = false
-end
-
-function WildfireBomb:CastSuccess(...)
-	Ability.CastSuccess(self, ...)
-	if MadBombardier.known then
-		MadBombardier.consumed = true
-	end
-end
-ShrapnelBomb.CastSuccess = WildfireBomb.CastSuccess
-PheromoneBomb.CastSuccess = WildfireBomb.CastSuccess
-VolatileBomb.CastSuccess = WildfireBomb.CastSuccess
-
-function ResonatingArrow:Remains()
-	return max(0, self.buff_duration - (Player.time - self.last_used))
 end
 
 -- End Ability Modifications
@@ -1800,660 +1830,23 @@ local function UseExtra(ability, overwrite)
 	end
 end
 
-local function WaitFor(ability, wait_time)
-	Player.wait_time = Player.ctime + wait_time
+local function Pool(ability, extra)
+	Player.pool_focus = ability:Cost() + (extra or 0)
 	return ability
 end
 
 -- Begin Action Priority Lists
 
-local APL = {
-	[SPEC.NONE] = {
-		main = function() end
-	},
-	[SPEC.BEASTMASTERY] = {},
-	[SPEC.MARKSMANSHIP] = {},
-	[SPEC.SURVIVAL] = {},
-}
-
 APL[SPEC.BEASTMASTERY].Main = function(self)
-	if CallPet:Usable() then
-		UseExtra(CallPet)
-	elseif RevivePet:Usable() then
-		UseExtra(RevivePet)
-	elseif MendPet:Usable() then
-		UseExtra(MendPet)
-	end
-	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or AspectOfTheWild:Up() or (WildSpirits.known and WildMark:Up())
-	if Player:TimeInCombat() == 0 then
---[[
-actions.precombat=flask
-actions.precombat+=/summon_pet
-actions.precombat+=/potion
-actions.precombat+=/aspect_of_the_wild,precast_time=1.1
-]]
-		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
-			UseCooldown(Trinket.BottledFlayedwingToxin)
-		end
-		if Trinket.SoleahsSecretTechnique.can_use and Trinket.SoleahsSecretTechnique.buff:Remains() < 300 and Trinket.SoleahsSecretTechnique:Usable() and Player.group_size > 1 then
-			UseCooldown(Trinket.SoleahsSecretTechnique)
-		end
-		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
-			UseCooldown(SummonSteward)
-		end
-		if EternalAugmentRune:Usable() and EternalAugmentRune.buff:Remains() < 300 then
-			UseCooldown(EternalAugmentRune)
-		end
-		if Opt.pot and not Player:InArenaOrBattleground() then
-			if EternalFlask:Usable() and EternalFlask.buff:Remains() < 300 and SpectralFlaskOfPower.buff:Remains() < 300 then
-				UseCooldown(SpectralFlaskOfPower)
-			end
-			if SpectralFlaskOfPower:Usable() and SpectralFlaskOfPower.buff:Remains() < 300 and EternalFlask.buff:Remains() < 300 then
-				UseCooldown(SpectralFlaskOfPower)
-			end
-		end
-		if Player.use_cds and AspectOfTheWild:Usable() then
-			UseCooldown(AspectOfTheWild)
-		end
-	end
---[[
-actions=auto_shot
-actions+=/use_items
-actions+=/call_action_list,name=cds
-actions+=/call_action_list,name=st,if=active_enemies<2
-actions+=/call_action_list,name=cleave,if=active_enemies>1
-]]
-	if Player.use_cds then
-		self:cds()
-	end
-	if PetFrenzy:Stack() >= 2 and PetFrenzy:Remains() < (Player.gcd + 0.3) and BarbedShot:Ready(PetFrenzy:Remains()) then
-		return WaitFor(BarbedShot, PetFrenzy:Remains() - 0.5)
-	end
-	if Player.enemies > 1 then
-		return self:cleave()
-	end
-	return self:st()
-end
 
-APL[SPEC.BEASTMASTERY].cds = function(self)
---[[
-actions.cds=ancestral_call,if=cooldown.bestial_wrath.remains>30
-actions.cds+=/fireblood,if=cooldown.bestial_wrath.remains>30
-actions.cds+=/berserking,if=buff.aspect_of_the_wild.up&(target.time_to_die>cooldown.berserking.duration+duration|(target.health.pct<35|!talent.killer_instinct.enabled))|target.time_to_die<13
-actions.cds+=/blood_fury,if=buff.aspect_of_the_wild.up&(target.time_to_die>cooldown.blood_fury.duration+duration|(target.health.pct<35|!talent.killer_instinct.enabled))|target.time_to_die<16
-actions.cds+=/lights_judgment,if=pet.cat.buff.frenzy.up&pet.cat.buff.frenzy.remains>gcd.max|!pet.cat.buff.frenzy.up
-actions.cds+=/potion,if=buff.bestial_wrath.up&buff.aspect_of_the_wild.up&(target.health.pct<35|!talent.killer_instinct.enabled)|target.time_to_die<25
-]]
-	if Opt.trinket then
-		if Trinket1:Usable() then
-			return UseCooldown(Trinket1)
-		elseif Trinket2:Usable() then
-			return UseCooldown(Trinket2)
-		end
-	end
-	if Opt.pot and Target.boss and SuperiorBattlePotionOfAgility:Usable() and (BestialWrath:Up() and AspectOfTheWild:Up() and (Target.health.pct < 35 or not KillerInstinct.known) or Target.timeToDie < 25) then
-		return UseCooldown(SuperiorBattlePotionOfAgility)
-	end
-	if WildSpirits:Usable() and WildMark:Down() then
-		return UseCooldown(WildSpirits)
-	end
-end
-
-APL[SPEC.BEASTMASTERY].st = function(self)
---[[
-actions.st=barbed_shot,if=pet.cat.buff.frenzy.up&pet.cat.buff.frenzy.remains<=gcd.max|full_recharge_time<gcd.max&cooldown.bestial_wrath.remains
-actions.st+=/aspect_of_the_wild
-actions.st+=/a_murder_of_crows
-actions.st+=/stampede,if=buff.aspect_of_the_wild.up&buff.bestial_wrath.up|target.time_to_die<15
-actions.st+=/bestial_wrath,if=cooldown.aspect_of_the_wild.remains>20|target.time_to_die<15
-actions.st+=/kill_command
-actions.st+=/chimaera_shot
-actions.st+=/dire_beast
-actions.st+=/barbed_shot,if=pet.cat.buff.frenzy.down&(charges_fractional>1.8|buff.bestial_wrath.up)|target.time_to_die<9
-actions.st+=/the_unbound_force,if=buff.reckless_force.up|buff.reckless_force_counter.stack<10
-actions.st+=/barrage
-actions.st+=/cobra_shot,if=(focus-cost+focus.regen*(cooldown.kill_command.remains-1)>action.kill_command.cost|cooldown.kill_command.remains>1+gcd)&cooldown.kill_command.remains>1
-actions.st+=/spitting_cobra
-actions.st+=/barbed_shot,if=charges_fractional>1.4
-]]
-	if BarbedShot:Usable() and ((PetFrenzy:Up() and PetFrenzy:Remains() <= (Player.gcd + 0.3)) or (BarbedShot:FullRechargeTime() < Player.gcd and not BestialWrath:Ready())) then
-		return BarbedShot
-	end
-	if AspectOfTheWild:Usable() then
-		UseCooldown(AspectOfTheWild)
-	end
-	if AMurderOfCrows:Usable() then
-		UseCooldown(AMurderOfCrows)
-	end
-	if Stampede:Usable() and (AspectOfTheWild:Up() and BestialWrath:Up() or Target.timeToDie < 15) then
-		UseCooldown(Stampede)
-	end
-	if BestialWrath:Usable() and (AspectOfTheWild:Cooldown() > 20 or Target.timeToDie < 15) then
-		UseCooldown(BestialWrath)
-	end
-	if KillCommandBM:Usable() then
-		return KillCommandBM
-	end
-	if ChimaeraShot:Usable() then
-		return ChimaeraShot
-	end
-	if DireBeast:Usable() then
-		return DireBeast
-	end
-	if BarbedShot:Usable() and ((PetFrenzy:Down() and (BarbedShot:ChargesFractional() > 1.8 or BestialWrath:Up())) or Target.timeToDie < 9) then
-		return BarbedShot
-	end
-	if Barrage:Usable() then
-		return Barrage
-	end
-	if CobraShot:Usable() and KillCommandBM:Cooldown() > 1 and (((Player:Focus() - CobraShot:Cost() + Player:FocusRegen() * (KillCommandBM:Cooldown() - 1)) > KillCommandBM:Cost()) or KillCommandBM:Cooldown() > (1 + Player.gcd)) then
-		return CobraShot
-	end
-	if SpittingCobra:Usable() then
-		UseCooldown(SpittingCobra)
-	end
-	if BarbedShot:Usable() and BarbedShot:ChargesFractional() > 1.4 then
-		return BarbedShot
-	end
-end
-
-APL[SPEC.BEASTMASTERY].cleave = function(self)
---[[
-actions.cleave=barbed_shot,target_if=min:dot.barbed_shot.remains,if=pet.cat.buff.frenzy.up&pet.cat.buff.frenzy.remains<=gcd.max
-actions.cleave+=/multishot,if=gcd.max-pet.cat.buff.beast_cleave.remains>0.25
-actions.cleave+=/barbed_shot,target_if=min:dot.barbed_shot.remains,if=full_recharge_time<gcd.max&cooldown.bestial_wrath.remains
-actions.cleave+=/aspect_of_the_wild
-actions.cleave+=/stampede,if=buff.aspect_of_the_wild.up&buff.bestial_wrath.up|target.time_to_die<15
-actions.cleave+=/bestial_wrath,if=cooldown.aspect_of_the_wild.remains_guess>20|talent.one_with_the_pack.enabled|target.time_to_die<15
-actions.cleave+=/chimaera_shot
-actions.cleave+=/a_murder_of_crows
-actions.cleave+=/barrage
-actions.cleave+=/kill_command
-actions.cleave+=/dire_beast
-actions.cleave+=/barbed_shot,target_if=min:dot.barbed_shot.remains,if=pet.cat.buff.frenzy.down&(charges_fractional>1.8|buff.bestial_wrath.up)|charges_fractional>1.4|target.time_to_die<9
-actions.cleave+=/the_unbound_force,if=buff.reckless_force.up|buff.reckless_force_counter.stack<10
-actions.cleave+=/cobra_shot,if=cooldown.kill_command.remains>focus.time_to_max
-actions.cleave+=/spitting_cobra
-]]
-	if BarbedShot:Usable() and PetFrenzy:Up() and PetFrenzy:Remains() <= (Player.gcd + 0.3) then
-		return BarbedShot
-	end
-	if MultiShotBM:Usable() and (Player.gcd - BeastCleave:Remains()) > 0.25 then
-		return MultiShotBM
-	end
-	if BarbedShot:Usable() and BarbedShot:FullRechargeTime() < Player.gcd and not BestialWrath:Ready() then
-		return BarbedShot
-	end
-	if AspectOfTheWild:Usable() then
-		UseCooldown(AspectOfTheWild)
-	end
-	if Stampede:Usable() and (AspectOfTheWild:Up() and BestialWrath:Up() or Target.timeToDie < 15) then
-		UseCooldown(Stampede)
-	end
-	if BestialWrath:Usable() and (AspectOfTheWild:Cooldown() > 20 or OneWithThePack.known or Target.timeToDie < 15) then
-		UseCooldown(BestialWrath)
-	end
-	if ChimaeraShot:Usable() then
-		return ChimaeraShot
-	end
-	if AMurderOfCrows:Usable() then
-		UseCooldown(AMurderOfCrows)
-	end
-	if Barrage:Usable() then
-		return Barrage
-	end
-	if KillCommandBM:Usable() then
-		return KillCommandBM
-	end
-	if DireBeast:Usable() then
-		return DireBeast
-	end
-	if BarbedShot:Usable() and ((PetFrenzy:Down() and (BarbedShot:ChargesFractional() > 1.8 or BestialWrath:Up())) or BarbedShot:ChargesFractional() > 1.4 or Target.timeToDie < 9) then
-		return BarbedShot
-	end
-	if CobraShot:Usable() and KillCommandBM:Cooldown() > Player:FocusTimeToMax() then
-		return CobraShot
-	end
-	if SpittingCobra:Usable() then
-		UseCooldown(SpittingCobra)
-	end
 end
 
 APL[SPEC.MARKSMANSHIP].Main = function(self)
-	if CallPet:Usable() then
-		UseExtra(CallPet)
-	elseif RevivePet:Usable() then
-		UseExtra(RevivePet)
-	elseif MendPet:Usable() then
-		UseExtra(MendPet)
-	end
-	if Player:TimeInCombat() == 0 then
-		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
-			UseCooldown(Trinket.BottledFlayedwingToxin)
-		end
-		if Trinket.SoleahsSecretTechnique.can_use and Trinket.SoleahsSecretTechnique.buff:Remains() < 300 and Trinket.SoleahsSecretTechnique:Usable() and Player.group_size > 1 then
-			UseCooldown(Trinket.SoleahsSecretTechnique)
-		end
-		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
-			UseCooldown(SummonSteward)
-		end
-		if EternalAugmentRune:Usable() and EternalAugmentRune.buff:Remains() < 300 then
-			UseCooldown(EternalAugmentRune)
-		end
-		if Opt.pot and not Player:InArenaOrBattleground() then
-			if EternalFlask:Usable() and EternalFlask.buff:Remains() < 300 and SpectralFlaskOfPower.buff:Remains() < 300 then
-				UseCooldown(SpectralFlaskOfPower)
-			end
-			if SpectralFlaskOfPower:Usable() and SpectralFlaskOfPower.buff:Remains() < 300 and EternalFlask.buff:Remains() < 300 then
-				UseCooldown(SpectralFlaskOfPower)
-			end
-		end
-	end
+
 end
 
 APL[SPEC.SURVIVAL].Main = function(self)
-	if CallPet:Usable() then
-		UseExtra(CallPet)
-	elseif RevivePet:Usable() then
-		UseExtra(RevivePet)
-	elseif MendPet:Usable() then
-		UseExtra(MendPet)
-	end
-	if Player:TimeInCombat() == 0 then
-		if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Remains() < 300 and Trinket.BottledFlayedwingToxin:Usable() then
-			UseCooldown(Trinket.BottledFlayedwingToxin)
-		end
-		if Trinket.SoleahsSecretTechnique.can_use and Trinket.SoleahsSecretTechnique.buff:Remains() < 300 and Trinket.SoleahsSecretTechnique:Usable() and Player.group_size > 1 then
-			UseCooldown(Trinket.SoleahsSecretTechnique)
-		end
-		if SummonSteward:Usable() and PhialOfSerenity:Charges() < 1 then
-			UseCooldown(SummonSteward)
-		end
-		if EternalAugmentRune:Usable() and EternalAugmentRune.buff:Remains() < 300 then
-			UseCooldown(EternalAugmentRune)
-		end
-		if Opt.pot and not Player:InArenaOrBattleground() then
-			if EternalFlask:Usable() and EternalFlask.buff:Remains() < 300 and SpectralFlaskOfPower.buff:Remains() < 300 then
-				UseCooldown(SpectralFlaskOfPower)
-			end
-			if SpectralFlaskOfPower:Usable() and SpectralFlaskOfPower.buff:Remains() < 300 and EternalFlask.buff:Remains() < 300 then
-				UseCooldown(SpectralFlaskOfPower)
-			end
-		end
-		if Harpoon:Usable() then
-			UseCooldown(Harpoon)
-		end
-	end
-	if Trinket.BottledFlayedwingToxin.can_use and Trinket.BottledFlayedwingToxin.buff:Down() and Trinket.BottledFlayedwingToxin:Usable() then
-		UseCooldown(Trinket.BottledFlayedwingToxin)
-	end
---[[
-actions=auto_attack
-# Delay facing your doubt until you have put Resonating Arrow down, or if the cooldown is too long to delay facing your Doubt. If none of these conditions are able to met within the 10 seconds leeway, the sim faces your Doubt automatically.
-actions+=/newfound_resolve,if=soulbind.newfound_resolve&(buff.resonating_arrow.up|cooldown.resonating_arrow.remains>10|target.time_to_die<16)
-actions+=/call_action_list,name=trinkets,if=covenant.kyrian&cooldown.coordinated_assault.remains&cooldown.resonating_arrow.remains|!covenant.kyrian&cooldown.coordinated_assault.remains
-actions+=/call_action_list,name=cds
-actions+=/call_action_list,name=bop,if=active_enemies<3&talent.birds_of_prey.enabled
-actions+=/call_action_list,name=st,if=active_enemies<3&!talent.birds_of_prey.enabled
-actions+=/call_action_list,name=cleave,if=active_enemies>2
-actions+=/arcane_torrent
-]]
-	Player.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or CoordinatedAssault:Up() or (WildSpirits.known and WildMark:Up())
-	if Player.use_cds then
-		if Opt.trinket then
-			self:trinkets()
-		end
-		self:cds()
-	end
-	if Player.enemies < 3 then
-		if BirdsOfPrey.known then
-			return self:bop()
-		end
-		return self:st()
-	end
-	return self:cleave()
-end
 
-APL[SPEC.SURVIVAL].cds = function(self)
---[[
-actions.cds=harpoon,if=talent.terms_of_engagement.enabled&focus<focus.max
-actions.cds+=/blood_fury,if=buff.coordinated_assault.up
-actions.cds+=/ancestral_call,if=buff.coordinated_assault.up
-actions.cds+=/fireblood,if=buff.coordinated_assault.up
-actions.cds+=/lights_judgment
-actions.cds+=/bag_of_tricks,if=cooldown.kill_command.full_recharge_time>gcd
-actions.cds+=/berserking,if=buff.coordinated_assault.up|time_to_die<13
-actions.cds+=/muzzle
-actions.cds+=/potion,if=target.time_to_die<25|buff.coordinated_assault.up
-actions.cds+=/fleshcraft,cancel_if=channeling&!soulbind.pustule_eruption,if=(focus<70|cooldown.coordinated_assault.remains<gcd)&(soulbind.pustule_eruption|soulbind.volatile_solvent)
-actions.cds+=/tar_trap,if=focus+cast_regen<focus.max&runeforge.soulforge_embers.equipped&tar_trap.remains<gcd&cooldown.flare.remains<gcd&(active_enemies>1|active_enemies=1&time_to_die>5*gcd)
-actions.cds+=/flare,if=focus+cast_regen<focus.max&tar_trap.up&runeforge.soulforge_embers.equipped&time_to_die>4*gcd
-actions.cds+=/kill_shot,if=active_enemies=1&target.time_to_die<focus%(variable.mb_rs_cost-cast_regen)*gcd
-actions.cds+=/mongoose_bite,if=active_enemies=1&target.time_to_die<focus%(variable.mb_rs_cost-cast_regen)*gcd
-actions.cds+=/raptor_strike,if=active_enemies=1&target.time_to_die<focus%(variable.mb_rs_cost-cast_regen)*gcd
-actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
-]]
-	if Opt.pot and Target.boss and not Player:InArenaOrBattleground() and PotionOfUnbridledFury:Usable() and ((CoordinatedAssault:Up() and Player:BloodlustActive()) or Target.timeToDie < 61) then
-		return UseCooldown(PotionOfUnbridledFury)
-	end
-	if WildSpirits:Usable() and WildMark:Down() then
-		return UseCooldown(WildSpirits)
-	end
-end
-
-APL[SPEC.SURVIVAL].trinkets = function(self)
---[[
-actions.trinkets=variable,name=sync_up,value=buff.resonating_arrow.up|buff.coordinated_assault.up
-actions.trinkets+=/variable,name=strong_sync_up,value=covenant.kyrian&buff.resonating_arrow.up&buff.coordinated_assault.up|!covenant.kyrian&buff.coordinated_assault.up
-actions.trinkets+=/variable,name=strong_sync_remains,op=setif,condition=covenant.kyrian,value=cooldown.resonating_arrow.remains<?cooldown.coordinated_assault.remains_guess,value_else=cooldown.coordinated_assault.remains_guess,if=buff.coordinated_assault.down
-actions.trinkets+=/variable,name=strong_sync_remains,op=setif,condition=covenant.kyrian,value=cooldown.resonating_arrow.remains,value_else=cooldown.coordinated_assault.remains_guess,if=buff.coordinated_assault.up
-actions.trinkets+=/variable,name=sync_remains,op=setif,condition=covenant.kyrian,value=cooldown.resonating_arrow.remains>?cooldown.coordinated_assault.remains_guess,value_else=cooldown.coordinated_assault.remains_guess
-actions.trinkets+=/use_items,slots=trinket1,if=((trinket.1.has_use_buff|covenant.kyrian&trinket.1.has_cooldown)&(variable.strong_sync_up&(!covenant.kyrian&!trinket.2.has_use_buff|covenant.kyrian&!trinket.2.has_cooldown|trinket.2.cooldown.remains|trinket.1.has_use_buff&(!trinket.2.has_use_buff|trinket.1.cooldown.duration>=trinket.2.cooldown.duration)|trinket.1.has_cooldown&!trinket.2.has_use_buff&trinket.1.cooldown.duration>=trinket.2.cooldown.duration)|!variable.strong_sync_up&(!trinket.2.has_use_buff&(trinket.1.cooldown.duration-5<variable.sync_remains|variable.sync_remains>trinket.1.cooldown.duration%2)|trinket.2.has_use_buff&(trinket.1.has_use_buff&trinket.1.cooldown.duration>=trinket.2.cooldown.duration&(trinket.1.cooldown.duration-5<variable.sync_remains|variable.sync_remains>trinket.1.cooldown.duration%2)|(!trinket.1.has_use_buff|trinket.2.cooldown.duration>=trinket.1.cooldown.duration)&(trinket.2.cooldown.ready&trinket.2.cooldown.duration-5>variable.sync_remains&variable.sync_remains<trinket.2.cooldown.duration%2|!trinket.2.cooldown.ready&(trinket.2.cooldown.remains-5<variable.strong_sync_remains&variable.strong_sync_remains>20&(trinket.1.cooldown.duration-5<variable.sync_remains|trinket.2.cooldown.remains-5<variable.sync_remains&trinket.2.cooldown.duration-10+variable.sync_remains<variable.strong_sync_remains|variable.sync_remains>trinket.1.cooldown.duration%2|variable.sync_up)|trinket.2.cooldown.remains-5>variable.strong_sync_remains&(trinket.1.cooldown.duration-5<variable.strong_sync_remains|trinket.1.cooldown.duration<fight_remains&variable.strong_sync_remains+trinket.1.cooldown.duration>fight_remains|!trinket.1.has_use_buff&(variable.sync_remains>trinket.1.cooldown.duration%2|variable.sync_up))))))|target.time_to_die<variable.sync_remains)|!trinket.1.has_use_buff&!covenant.kyrian&(trinket.2.has_use_buff&((!variable.sync_up|trinket.2.cooldown.remains>5)&(variable.sync_remains>20|trinket.2.cooldown.remains-5>variable.sync_remains))|!trinket.2.has_use_buff&(!trinket.2.has_cooldown|trinket.2.cooldown.remains|trinket.2.cooldown.duration>=trinket.1.cooldown.duration)))&(!trinket.1.is.cache_of_acquired_treasures|active_enemies<2&buff.acquired_wand.up|active_enemies>1&!buff.acquired_wand.up)
-actions.trinkets+=/use_items,slots=trinket2,if=((trinket.2.has_use_buff|covenant.kyrian&trinket.2.has_cooldown)&(variable.strong_sync_up&(!covenant.kyrian&!trinket.1.has_use_buff|covenant.kyrian&!trinket.1.has_cooldown|trinket.1.cooldown.remains|trinket.2.has_use_buff&(!trinket.1.has_use_buff|trinket.2.cooldown.duration>=trinket.1.cooldown.duration)|trinket.2.has_cooldown&!trinket.1.has_use_buff&trinket.2.cooldown.duration>=trinket.1.cooldown.duration)|!variable.strong_sync_up&(!trinket.1.has_use_buff&(trinket.2.cooldown.duration-5<variable.sync_remains|variable.sync_remains>trinket.2.cooldown.duration%2)|trinket.1.has_use_buff&(trinket.2.has_use_buff&trinket.2.cooldown.duration>=trinket.1.cooldown.duration&(trinket.2.cooldown.duration-5<variable.sync_remains|variable.sync_remains>trinket.2.cooldown.duration%2)|(!trinket.2.has_use_buff|trinket.1.cooldown.duration>=trinket.2.cooldown.duration)&(trinket.1.cooldown.ready&trinket.1.cooldown.duration-5>variable.sync_remains&variable.sync_remains<trinket.1.cooldown.duration%2|!trinket.1.cooldown.ready&(trinket.1.cooldown.remains-5<variable.strong_sync_remains&variable.strong_sync_remains>20&(trinket.2.cooldown.duration-5<variable.sync_remains|trinket.1.cooldown.remains-5<variable.sync_remains&trinket.1.cooldown.duration-10+variable.sync_remains<variable.strong_sync_remains|variable.sync_remains>trinket.2.cooldown.duration%2|variable.sync_up)|trinket.1.cooldown.remains-5>variable.strong_sync_remains&(trinket.2.cooldown.duration-5<variable.strong_sync_remains|trinket.2.cooldown.duration<fight_remains&variable.strong_sync_remains+trinket.2.cooldown.duration>fight_remains|!trinket.2.has_use_buff&(variable.sync_remains>trinket.2.cooldown.duration%2|variable.sync_up))))))|target.time_to_die<variable.sync_remains)|!trinket.2.has_use_buff&!covenant.kyrian&(trinket.1.has_use_buff&((!variable.sync_up|trinket.1.cooldown.remains>5)&(variable.sync_remains>20|trinket.1.cooldown.remains-5>variable.sync_remains))|!trinket.1.has_use_buff&(!trinket.1.has_cooldown|trinket.1.cooldown.remains|trinket.1.cooldown.duration>=trinket.2.cooldown.duration)))&(!trinket.2.is.cache_of_acquired_treasures|active_enemies<2&buff.acquired_wand.up|active_enemies>1&!buff.acquired_wand.up)
-actions.trinkets+=/use_item,name=jotungeirr_destinys_call
-]]
-	if Trinket1:Usable() then
-		return UseCooldown(Trinket1)
-	elseif Trinket2:Usable() then
-		return UseCooldown(Trinket2)
-	end
-end
-
-APL[SPEC.SURVIVAL].nta = function(self)
---[[
-actions.nta=steel_trap
-actions.nta+=/freezing_trap,if=!buff.wild_spirits.remains|buff.wild_spirits.remains&cooldown.kill_command.remains
-actions.nta+=/tar_trap,if=!buff.wild_spirits.remains|buff.wild_spirits.remains&cooldown.kill_command.remains
-]]
-	if SteelTrap:Usable() then
-		UseCooldown(SteelTrap)
-	end
-	if FreezingTrap:Usable() and (not WildSpirits.known or WildMark:Down() or not KillCommand:Ready()) then
-		UseCooldown(FreezingTrap)
-	end
-	if TarTrap:Usable() and (not WildSpirits.known or WildMark:Down() or not KillCommand:Ready()) then
-		UseCooldown(TarTrap)
-	end
-end
-
-APL[SPEC.SURVIVAL].bop = function(self)
---[[
-actions.bop=serpent_sting,target_if=min:remains,if=buff.vipers_venom.remains&(buff.vipers_venom.remains<gcd|refreshable)
-actions.bop+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&buff.nesingwarys_trapping_apparatus.up|focus+cast_regen<focus.max+10&buff.nesingwarys_trapping_apparatus.up&buff.nesingwarys_trapping_apparatus.remains<gcd
-actions.bop+=/kill_shot
-actions.bop+=/wildfire_bomb,if=focus+cast_regen<focus.max&full_recharge_time<gcd|buff.mad_bombardier.up
-actions.bop+=/flanking_strike,if=focus+cast_regen<focus.max
-actions.bop+=/flayed_shot
-actions.bop+=/call_action_list,name=nta,if=runeforge.nessingwarys_trapping_apparatus.equipped&focus<variable.mb_rs_cost
-actions.bop+=/death_chakram,if=focus+cast_regen<focus.max
-actions.bop+=/raptor_strike,target_if=max:debuff.latent_poison_injection.stack,if=buff.coordinated_assault.up&buff.coordinated_assault.remains<1.5*gcd
-actions.bop+=/mongoose_bite,target_if=max:debuff.latent_poison_injection.stack,if=buff.coordinated_assault.up&buff.coordinated_assault.remains<1.5*gcd
-actions.bop+=/a_murder_of_crows
-actions.bop+=/raptor_strike,target_if=max:debuff.latent_poison_injection.stack,if=buff.tip_of_the_spear.stack=3
-actions.bop+=/mongoose_bite,target_if=max:debuff.latent_poison_injection.stack,if=talent.alpha_predator.enabled&(buff.mongoose_fury.up&buff.mongoose_fury.remains<focus%(variable.mb_rs_cost-cast_regen)*gcd)
-actions.bop+=/wildfire_bomb,if=focus+cast_regen<focus.max&!ticking&(full_recharge_time<gcd|!dot.wildfire_bomb.ticking&buff.mongoose_fury.remains>full_recharge_time-1*gcd|!dot.wildfire_bomb.ticking&!buff.mongoose_fury.remains)|time_to_die<18&!dot.wildfire_bomb.ticking
-# If you don't have Nessingwary's Trapping Apparatus, simply cast Kill Command if you won't overcap on Focus from doing so. If you do have Nessingwary's Trapping Apparatus you should cast Kill Command if your focus is below the cost of Mongoose Bite or Raptor Strike
-actions.bop+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&(!runeforge.nessingwarys_trapping_apparatus|focus<variable.mb_rs_cost)
-# With Nessingwary's Trapping Apparatus only Kill Command if your traps are on cooldown, otherwise stop using Kill Command if your current focus amount is enough to sustain the amount of time left for any of your traps to come off cooldown
-actions.bop+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&runeforge.nessingwarys_trapping_apparatus&cooldown.freezing_trap.remains>(focus%(variable.mb_rs_cost-cast_regen)*gcd)&cooldown.tar_trap.remains>(focus%(variable.mb_rs_cost-cast_regen)*gcd)&(!talent.steel_trap|talent.steel_trap&cooldown.steel_trap.remains>(focus%(variable.mb_rs_cost-cast_regen)*gcd))
-actions.bop+=/steel_trap,if=focus+cast_regen<focus.max
-actions.bop+=/serpent_sting,target_if=min:remains,if=dot.serpent_sting.refreshable&!buff.coordinated_assault.up|talent.alpha_predator&refreshable&!buff.mongoose_fury.up
-actions.bop+=/resonating_arrow
-actions.bop+=/wild_spirits
-actions.bop+=/coordinated_assault,if=!buff.coordinated_assault.up
-actions.bop+=/mongoose_bite,if=buff.mongoose_fury.up|focus+action.kill_command.cast_regen>focus.max|buff.coordinated_assault.up
-actions.bop+=/raptor_strike,target_if=max:debuff.latent_poison_injection.stack
-actions.bop+=/wildfire_bomb,if=dot.wildfire_bomb.refreshable
-actions.bop+=/serpent_sting,target_if=min:remains,if=buff.vipers_venom.up
-]]
-
-end
-
-APL[SPEC.SURVIVAL].st = function(self)
---[[
-actions.st=death_chakram,if=focus+cast_regen<focus.max&(!raid_event.adds.exists|!raid_event.adds.up&raid_event.adds.duration+raid_event.adds.in<5)|raid_event.adds.up&raid_event.adds.remains>40
-actions.st+=/serpent_sting,target_if=min:remains,if=!dot.serpent_sting.ticking&target.time_to_die>7|buff.vipers_venom.up&buff.vipers_venom.remains<gcd
-actions.st+=/flayed_shot
-actions.st+=/resonating_arrow,if=!raid_event.adds.exists|!raid_event.adds.up&(raid_event.adds.duration+raid_event.adds.in<20|raid_event.adds.count=1)|raid_event.adds.up&raid_event.adds.remains>40|time_to_die<10
-actions.st+=/wild_spirits,if=!raid_event.adds.exists|!raid_event.adds.up&raid_event.adds.duration+raid_event.adds.in<20|raid_event.adds.up&raid_event.adds.remains>20|time_to_die<20
-actions.st+=/coordinated_assault,if=!raid_event.adds.exists|covenant.night_fae&cooldown.wild_spirits.remains|!covenant.night_fae&(!raid_event.adds.up&raid_event.adds.duration+raid_event.adds.in<30|raid_event.adds.up&raid_event.adds.remains>20|!raid_event.adds.up)|time_to_die<30
-actions.st+=/kill_shot
-actions.st+=/flanking_strike,if=focus+cast_regen<focus.max
-actions.st+=/a_murder_of_crows
-actions.st+=/wildfire_bomb,if=full_recharge_time<2*gcd&set_bonus.tier28_2pc|buff.mad_bombardier.up|!set_bonus.tier28_2pc&(full_recharge_time<gcd|focus+cast_regen<focus.max&(next_wi_bomb.volatile&dot.serpent_sting.ticking&dot.serpent_sting.refreshable|next_wi_bomb.pheromone&!buff.mongoose_fury.up&focus+cast_regen<focus.max-action.kill_command.cast_regen*3)|time_to_die<10)
-actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=set_bonus.tier28_2pc&dot.pheromone_bomb.ticking&!buff.mad_bombardier.up&(focus+cast_regen<focus.max|buff.tip_of_the_spear.stack<3)
-actions.st+=/carve,if=active_enemies>1&!runeforge.rylakstalkers_confounding_strikes.equipped
-actions.st+=/butchery,if=active_enemies>1&!runeforge.rylakstalkers_confounding_strikes.equipped&cooldown.wildfire_bomb.full_recharge_time>spell_targets&(charges_fractional>2.5|dot.shrapnel_bomb.ticking)
-actions.st+=/steel_trap,if=focus+cast_regen<focus.max
-actions.st+=/mongoose_bite,target_if=max:debuff.latent_poison_injection.stack,if=talent.alpha_predator.enabled&(buff.mongoose_fury.up&buff.mongoose_fury.remains<focus%(variable.mb_rs_cost-cast_regen)*gcd&!buff.wild_spirits.remains|buff.mongoose_fury.remains&next_wi_bomb.pheromone)
-actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=full_recharge_time<gcd&focus+cast_regen<focus.max
-actions.st+=/raptor_strike,target_if=max:debuff.latent_poison_injection.stack,if=buff.tip_of_the_spear.stack=3|dot.shrapnel_bomb.ticking
-actions.st+=/mongoose_bite,if=dot.shrapnel_bomb.ticking
-actions.st+=/wildfire_bomb,if=next_wi_bomb.volatile&dot.serpent_sting.refreshable&dot.serpent_sting.remains>travel_time&charges_fractional>1.5
-actions.st+=/serpent_sting,target_if=min:remains,if=refreshable&target.time_to_die>7|buff.vipers_venom.up
-actions.st+=/wildfire_bomb,if=next_wi_bomb.shrapnel&focus>variable.mb_rs_cost*2&dot.serpent_sting.remains>5*gcd&!set_bonus.tier28_2pc
-actions.st+=/chakrams
-actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
-actions.st+=/wildfire_bomb,if=runeforge.rylakstalkers_confounding_strikes.equipped
-actions.st+=/mongoose_bite,target_if=max:debuff.latent_poison_injection.stack,if=buff.mongoose_fury.up|focus+action.kill_command.cast_regen>focus.max-15|dot.shrapnel_bomb.ticking|buff.wild_spirits.remains
-actions.st+=/raptor_strike,target_if=max:debuff.latent_poison_injection.stack
-actions.st+=/wildfire_bomb,if=(next_wi_bomb.volatile&dot.serpent_sting.ticking|next_wi_bomb.pheromone|next_wi_bomb.shrapnel&focus>50)&!set_bonus.tier28_2pc
-]]
-	if DeathChakram:Usable() and DeathCharkram:WontCapFocus() then
-		UseCooldown(DeathChakram)
-	end
-	if SerpentSting:Usable() and ((SerpentSting:Down() and Target.timeToDie > 7) or (VipersVenom:Up() and VipersVenom:Remains() < Player.gcd)) then
-		return SerpentSting
-	end
-	if FlayedShot:Usable() then
-		return FlayedShot
-	end
-	if ResonatingArrow:Usable() and ResonatingArrow:Down() then
-		UseCooldown(ResonatingArrow)
-	end
-	if WildSpirits:Usable() and WildMark:Down() and (CoordinatedAssault:Up() or CoordinatedAssault:Ready() or not CoordinatedAssault:Ready(20)) then
-		UseCooldown(WildSpirits)
-	end
-	if CoordinatedAssault:Usable() and (not WildSpirits.known or WildSpirits:Ready() or WildMark:Up() or (Target.boss and Target.timeToDie < 30)) then
-		UseCooldown(CoordinatedAssault)
-	end
-	if KillShot:Usable() then
-		return KillShot
-	end
-	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
-		return FlankingStrike
-	end
-	if AMurderOfCrows:Usable() then
-		UseCooldown(AMurderOfCrows)
-	end
-	if WildfireBomb:Usable() then
-		if MadBombardier.known then
-			if WildfireBomb:FullRechargeTime() < (Player.gcd * 2) or MadBombardier:Up() then
-				return WildfireBomb
-			end
-		elseif WildfireBomb:FullRechargeTime() < Player.gcd or Target.timeToDie < 10 or (WildfireBomb:WontCapFocus() and ((VolatileBomb.next and SerpentSting:Remains() > WildfireBomb:TravelTime() and SerpentSting:Refreshable()) or (PheromoneBomb.next and MongooseFury:Down() and (Player:Focus() + WildfireBomb:CastRegen()) < (Player:FocusMax() - KillCommand:CastRegen() * 3)))) then
-			return WildfireBomb
-		end
-	end
-	if MadBombardier.known and KillCommand:Usable() and PheromoneBomb:Up() and MadBombardier:Down() and (KillCommand:WontCapFocus() or TipOfTheSpear:Stack() < 3) then
-		return KillCommand
-	end
-	if Player.enemies > 1 and not RylakstalkersConfoundingStrikes.known then
-		if Carve:Usable() then
-			return Carve
-		end
-		if Butchery:Usable() and WildfireBomb:FullRechargeTime() > Player.enemies and (Butchery:ChargesFractional() > 2.5 or (WildfireInfusion.known and ShrapnelBomb:Up())) then
-			return Butchery
-		end
-	end
-	if SteelTrap:Usable() and SteelTrap:WontCapFocus() then
-		UseCooldown(SteelTrap)
-	end
-	if AlphaPredator.known and MongooseBite:Usable() and MongooseFury:Up() and (PheromoneBomb.next or (MongooseFury:Remains() < (Player:Focus() / (MongooseBite:Cost() - MongooseBite:CastRegen()) * Player.gcd) and WildMark:Down())) then
-		return MongooseBite
-	end
-	if KillCommand:Usable() and KillCommand:WontCapFocus() and KillCommand:FullRechargeTime() < Player.gcd then
-		return KillCommand
-	end
-	if RaptorStrike:Usable() and ((TipOfTheSpear.known and TipOfTheSpear:Stack() >= 3) or (WildfireInfusion.known and ShrapnelBomb:Up())) then
-		return RaptorStrike
-	end
-	if WildfireInfusion.known and MongooseBite:Usable() and ShrapnelBomb:Up() then
-		return MongooseBite
-	end
-	if WildfireInfusion.known and WildfireBomb:Usable() and VolatileBomb.next and SerpentSting:Refreshable() and SerpentSting:Remains() > WildfireBomb:TravelTime() and WildfireBomb:ChargesFractional() > 1.5 then
-		return WildfireBomb
-	end
-	if SerpentSting:Usable() and ((SerpentSting:Refreshable() and Target.timeToDie > 7) or (VipersVenom.known and VipersVenom:Up())) then
-		return SerpentSting
-	end
-	if WildfireInfusion.known and not MadBombardier.known and WildfireBomb:Usable() and ShrapnelBomb.next and Player:Focus() > (RaptorStrike:Cost() * 2) and SerpentSting:Remains() > (5 * Player.gcd) then
-		return WildfireBomb
-	end
-	if Chakrams:Usable() then
-		return Chakrams
-	end
-	if KillCommand:Usable() and KillCommand:WontCapFocus() then
-		return KillCommand
-	end
-	if RylakstalkersConfoundingStrikes.known and WildfireBomb:Usable() then
-		return WildfireBomb
-	end
-	if MongooseBite:Usable() and (MongooseFury:Up() or (Player:Focus() + KillCommand:CastRegen()) > (Player:FocusMax() - 15) or ShrapnelBomb:Up() or WildMark:Up()) then
-		return MongooseBite
-	end
-	if RaptorStrike:Usable() then
-		return RaptorStrike
-	end
-	if WildfireInfusion.known and not MadBombardier.known and WildfireBomb:Usable() and (PheromoneBomb.next or (ShrapnelBomb.next and Player:Focus() > 50) or (VolatileBomb.next and SerpentSting:Remains() > WildfireBomb:TravelTime())) then
-		return WildfireBomb
-	end
-end
-
-APL[SPEC.SURVIVAL].cleave = function(self)
---[[
-actions.cleave=serpent_sting,target_if=min:remains,if=talent.hydras_bite.enabled&buff.vipers_venom.remains&buff.vipers_venom.remains<gcd
-actions.cleave+=/wild_spirits,if=!raid_event.adds.exists|raid_event.adds.remains>=10|active_enemies>=raid_event.adds.count*2
-actions.cleave+=/resonating_arrow,if=!raid_event.adds.exists|raid_event.adds.remains>=8|active_enemies>=raid_event.adds.count*2
-actions.cleave+=/coordinated_assault,if=!raid_event.adds.exists|raid_event.adds.remains>=10|active_enemies>=raid_event.adds.count*2
-actions.cleave+=/wildfire_bomb,if=full_recharge_time<gcd
-actions.cleave+=/death_chakram,if=(!raid_event.adds.exists|raid_event.adds.remains>5|active_enemies>=raid_event.adds.count*2)|focus+cast_regen<focus.max&!runeforge.bag_of_munitions.equipped
-actions.cleave+=/call_action_list,name=nta,if=runeforge.nessingwarys_trapping_apparatus.equipped&focus<variable.mb_rs_cost
-actions.cleave+=/chakrams
-actions.cleave+=/butchery,if=dot.shrapnel_bomb.ticking&(dot.internal_bleeding.stack<2|dot.shrapnel_bomb.remains<gcd)
-actions.cleave+=/carve,if=dot.shrapnel_bomb.ticking&!set_bonus.tier28_2pc
-actions.cleave+=/butchery,if=charges_fractional>2.5&cooldown.wildfire_bomb.full_recharge_time>spell_targets%2
-actions.cleave+=/flanking_strike,if=focus+cast_regen<focus.max
-actions.cleave+=/carve,if=cooldown.wildfire_bomb.full_recharge_time>spell_targets%2
-actions.cleave+=/wildfire_bomb,if=buff.mad_bombardier.up
-actions.cleave+=/kill_command,target_if=dot.pheromone_bomb.ticking&set_bonus.tier28_2pc
-actions.cleave+=/kill_shot,if=buff.flayers_mark.up
-actions.cleave+=/flayed_shot,target_if=max:target.health.pct
-actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&!ticking&next_wi_bomb.volatile&target.time_to_die>15&focus+cast_regen>35&active_enemies<=4
-actions.cleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&full_recharge_time<gcd&(runeforge.nessingwarys_trapping_apparatus.equipped&cooldown.freezing_trap.remains&cooldown.tar_trap.remains|!runeforge.nessingwarys_trapping_apparatus.equipped)
-actions.cleave+=/wildfire_bomb,if=!dot.wildfire_bomb.ticking&!set_bonus.tier28_2pc|charges_fractional>1.3
-actions.cleave+=/butchery,if=(!next_wi_bomb.shrapnel|!talent.wildfire_infusion.enabled)&cooldown.wildfire_bomb.full_recharge_time>spell_targets%2
-actions.cleave+=/a_murder_of_crows
-actions.cleave+=/steel_trap,if=focus+cast_regen<focus.max
-actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&talent.hydras_bite.enabled&target.time_to_die>8
-actions.cleave+=/carve
-actions.cleave+=/kill_command,target_if=focus+cast_regen<focus.max&(runeforge.nessingwarys_trapping_apparatus.equipped&cooldown.freezing_trap.remains&cooldown.tar_trap.remains|!runeforge.nessingwarys_trapping_apparatus.equipped)
-actions.cleave+=/kill_shot
-actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&target.time_to_die>8
-actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison_injection.stack
-actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison_injection.stack
-]]
-	if HydrasBite.known and SerpentSting:Usable() and VipersVenom:Up() and VipersVenom:Remains() < Player.gcd then
-		return SerpentSting
-	end
-	if WildSpirits:Usable() and WildMark:Down() and (CoordinatedAssault:Up() or CoordinatedAssault:Ready() or not CoordinatedAssault:Ready(20)) then
-		UseCooldown(WildSpirits)
-	end
-	if ResonatingArrow:Usable() and ResonatingArrow:Down() then
-		UseCooldown(ResonatingArrow)
-	end
-	if CoordinatedAssault:Usable() and (not WildSpirits.known or WildSpirits:Ready() or WildMark:Up()) then
-		UseCooldown(CoordinatedAssault)
-	end
-	if WildfireBomb:Usable() and WildfireBomb:FullRechargeTime() < Player.gcd then
-		return WildfireBomb
-	end
-	if DeathChakram:Usable() then
-		UseCooldown(DeathChakram)
-	end
-	if Chakrams:Usable() then
-		return Chakrams
-	end
-	if Butchery:Usable() and ShrapnelBomb:Up() and (InternalBleeding:Stack() < 2 or ShrapnelBomb:Remains() < Player.gcd) then
-		return Butchery
-	end
-	if Carve:Usable() and ShrapnelBomb:Up() and not MadBombardier.known then
-		return Carve
-	end
-	if Butchery:Usable() and Butchery:ChargesFractional() > 2.5 and WildfireBomb:FullRechargeTime() > (Player.enemies / 2) then
-		return Butchery
-	end
-	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
-		return FlankingStrike
-	end
-	if Carve:Usable() and WildfireBomb:FullRechargeTime() > (Player.enemies / 2) then
-		return Carve
-	end
-	if MadBombardier.known then
-		if WildfireBomb:Usable() and MadBombardier:Up() then
-			return WildfireBomb
-		end
-		if KillCommand:Usable() and PheromoneBomb:Up() then
-			return KillCommand
-		end
-	end
-	if FlayedShot.known then
-		if KillShot:Usable() and FlayersMark:Up() then
-			return KillShot
-		end
-		if FlayedShot:Usable() then
-			return FlayedShot
-		end
-	end
-	if SerpentSting:Usable() and SerpentSting:Refreshable() and VolatileBomb.next and Target.timeToDie > 15 and (Player:Focus() + SerpentSting:CastRegen()) > 35 and Player.enemies <= 4 then
-		return SerpentSting
-	end
-	if KillCommand:Usable() and KillCommand:WontCapFocus() and KillCommand:FullRechargeTime() < Player.gcd and (not NesingwarysTrappingApparatus.known or not (FreezingTrap:Ready() or TarTrap:Ready())) then
-		return KillCommand
-	end
-	if WildfireBomb:Usable() and (WildfireBomb:ChargesFractional() > 1.3 or (not MadBombardier.known and WildfireBomb:Down())) then
-		return WildfireBomb
-	end
-	if Butchery:Usable() and (not WildfireInfusion.known or not ShrapnelBomb.next) and WildfireBomb:FullRechargeTime() > (Player.enemies / 2) then
-		return Butchery
-	end
-	if AMurderOfCrows:Usable() then
-		UseCooldown(AMurderOfCrows)
-	end
-	if SteelTrap:Usable() and SteelTrap:WontCapFocus() then
-		UseCooldown(SteelTrap)
-	end
-	if HydrasBite.known and SerpentSting:Usable() and SerpentSting:Refreshable() and Target.timeToDie > 8 then
-		return SerpentSting
-	end
-	if Carve:Usable() then
-		return Carve
-	end
-	if KillCommand:Usable() and KillCommand:WontCapFocus() and (not NesingwarysTrappingApparatus.known or not (FreezingTrap:Ready() or TarTrap:Ready())) then
-		return KillCommand
-	end
-	if KillShot:Usable() then
-		return KillShot
-	end
-	if SerpentSting:Usable() and SerpentSting:Refreshable() and Target.timeToDie > 8 then
-		return SerpentSting
-	end
-	if MongooseBite:Usable() then
-		return MongooseBite
-	end
-	if RaptorStrike:Usable() then
-		return RaptorStrike
-	end
 end
 
 APL.Interrupt = function(self)
@@ -2463,8 +1856,11 @@ APL.Interrupt = function(self)
 	if Muzzle:Usable() then
 		return Muzzle
 	end
-	if Intimidation:Usable() and Target.stunnable then
+	if Intimidation:Usable() then
 		return Intimidation
+	end
+	if ScatterShot:Usable() then
+		return ScatterShot
 	end
 end
 
@@ -2473,7 +1869,7 @@ end
 -- Start UI API
 
 function UI.DenyOverlayGlow(actionButton)
-	if not Opt.glow.blizzard then
+	if not Opt.glow.blizzard and actionButton.overlay then
 		actionButton.overlay:Hide()
 	end
 end
@@ -2496,6 +1892,17 @@ function UI:UpdateGlowColorAndScale()
 		glow.outerGlow:SetVertexColor(r, g, b)
 		glow.outerGlowOver:SetVertexColor(r, g, b)
 		glow.ants:SetVertexColor(r, g, b)
+	end
+end
+
+function UI:DisableOverlayGlows()
+	if LibStub and LibStub.GetLibrary and not Opt.glow.blizzard then
+		local lib = LibStub:GetLibrary('LibButtonGlow-1.0', true)
+		if lib then
+			lib.ShowOverlayGlow = function(self)
+				return
+			end
+		end
 	end
 end
 
@@ -2569,27 +1976,13 @@ function UI:UpdateGlows()
 end
 
 function UI:UpdateDraggable()
-	ghPanel:EnableMouse(Opt.aoe or not Opt.locked)
+	local draggable = not (Opt.locked or Opt.snap or Opt.aoe)
+	ghPanel:EnableMouse(draggable or Opt.aoe)
 	ghPanel.button:SetShown(Opt.aoe)
-	if Opt.locked then
-		ghPanel:SetScript('OnDragStart', nil)
-		ghPanel:SetScript('OnDragStop', nil)
-		ghPanel:RegisterForDrag(nil)
-		ghPreviousPanel:EnableMouse(false)
-		ghCooldownPanel:EnableMouse(false)
-		ghInterruptPanel:EnableMouse(false)
-		ghExtraPanel:EnableMouse(false)
-	else
-		if not Opt.aoe then
-			ghPanel:SetScript('OnDragStart', ghPanel.StartMoving)
-			ghPanel:SetScript('OnDragStop', ghPanel.StopMovingOrSizing)
-			ghPanel:RegisterForDrag('LeftButton')
-		end
-		ghPreviousPanel:EnableMouse(true)
-		ghCooldownPanel:EnableMouse(true)
-		ghInterruptPanel:EnableMouse(true)
-		ghExtraPanel:EnableMouse(true)
-	end
+	ghPreviousPanel:EnableMouse(draggable)
+	ghCooldownPanel:EnableMouse(draggable)
+	ghInterruptPanel:EnableMouse(draggable)
+	ghExtraPanel:EnableMouse(draggable)
 end
 
 function UI:UpdateAlpha()
@@ -2636,16 +2029,16 @@ UI.anchor_points = {
 	},
 	kui = { -- Kui Nameplates
 		[SPEC.BEASTMASTERY] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 28 },
-			['below'] = { 'TOP', 'BOTTOM', 0, 4 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 24 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -1 }
 		},
 		[SPEC.MARKSMANSHIP] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 28 },
-			['below'] = { 'TOP', 'BOTTOM', 0, 4 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 24 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -1 }
 		},
 		[SPEC.SURVIVAL] = {
-			['above'] = { 'BOTTOM', 'TOP', 0, 28 },
-			['below'] = { 'TOP', 'BOTTOM', 0, 4 }
+			['above'] = { 'BOTTOM', 'TOP', 0, 24 },
+			['below'] = { 'TOP', 'BOTTOM', 0, -1 }
 		},
 	},
 }
@@ -2673,7 +2066,7 @@ function UI:HookResourceFrame()
 		self.anchor.frame = KuiNameplatesPlayerAnchor
 	else
 		self.anchor.points = self.anchor_points.blizzard
-		self.anchor.frame = NamePlateDriverFrame:GetClassNameplateManaBar()
+		self.anchor.frame = NamePlateDriverFrame:GetClassNameplateBar()
 	end
 	if self.anchor.frame then
 		self.anchor.frame:HookScript('OnHide', self.OnResourceFrameHide)
@@ -2703,7 +2096,7 @@ function UI:Disappear()
 end
 
 function UI:UpdateDisplay()
-	timer.display = 0
+	Timer.display = 0
 	local dim, dim_cd, text_center, text_cd
 
 	if Opt.dimmer then
@@ -2714,10 +2107,15 @@ function UI:UpdateDisplay()
 		           (Player.cd.spellId and IsUsableSpell(Player.cd.spellId)) or
 		           (Player.cd.itemId and IsUsableItem(Player.cd.itemId)))
 	end
-	if Player.main and Player.main.requires_react then
-		local react = Player.main:React()
-		if react > 0 then
-			text_center = format('%.1f', react)
+	if Player.main then
+		if Player.main.requires_react then
+			local react = Player.main:React()
+			if react > 0 then
+				text_center = format('%.1f', react)
+			end
+		end
+		if Player.main_freecast then
+			border = 'freecast'
 		end
 	end
 	if Player.cd and Player.cd.requires_react then
@@ -2726,21 +2124,16 @@ function UI:UpdateDisplay()
 			text_cd = format('%.1f', react)
 		end
 	end
-	if Player.wait_time then
-		local deficit = Player.wait_time - GetTime()
+	if Player.pool_focus then
+		local deficit = Player.pool_focus - UnitPower('player', 2)
 		if deficit > 0 then
-			text_center = format('WAIT %.1fs', deficit)
+			text_center = format('POOL %d', deficit)
 			dim = Opt.dimmer
 		end
 	end
-	if Player.main and Player.main_freecast then
-		if not ghPanel.freeCastOverlayOn then
-			ghPanel.freeCastOverlayOn = true
-			ghPanel.border:SetTexture(ADDON_PATH .. 'freecast.blp')
-		end
-	elseif ghPanel.freeCastOverlayOn then
-		ghPanel.freeCastOverlayOn = false
-		ghPanel.border:SetTexture(ADDON_PATH .. 'border.blp')
+	if border ~= ghPanel.border.overlay then
+		ghPanel.border.overlay = border
+		ghPanel.border:SetTexture(ADDON_PATH .. (border or 'border') .. '.blp')
 	end
 
 	ghPanel.dimmer:SetShown(dim)
@@ -2751,14 +2144,13 @@ function UI:UpdateDisplay()
 end
 
 function UI:UpdateCombat()
-	timer.combat = 0
-	
+	Timer.combat = 0
+
 	Player:Update()
 
-	Player.main = APL[Player.spec]:Main()
 	if Player.main then
 		ghPanel.icon:SetTexture(Player.main.icon)
-		Player.main_freecast = Player.main.focus_cost > 0 and Player.main:Cost() == 0
+		Player.main_freecast = (Player.main.focus_cost > 0 and Player.main:Cost() == 0)
 	end
 	if Player.cd then
 		ghCooldownPanel.icon:SetTexture(Player.cd.icon)
@@ -2816,8 +2208,8 @@ function UI:UpdateCombat()
 end
 
 function UI:UpdateCombatWithin(seconds)
-	if Opt.frequency - timer.combat > seconds then
-		timer.combat = max(seconds, Opt.frequency - seconds)
+	if Opt.frequency - Timer.combat > seconds then
+		Timer.combat = max(seconds, Opt.frequency - seconds)
 	end
 end
 
@@ -2825,21 +2217,22 @@ end
 
 -- Start Event Handling
 
-function events:ADDON_LOADED(name)
+function Events:ADDON_LOADED(name)
 	if name == ADDON then
 		Opt = GoodHunting
-		if not Opt.frequency then
-			print('It looks like this is your first time running ' .. ADDON .. ', why don\'t you take some time to familiarize yourself with the commands?')
-			print('Type |cFFFFD000' .. SLASH_GoodHunting1 .. '|r for a list of commands.')
-		end
-		if UnitLevel('player') < 10 then
-			print('[|cFFFFD000Warning|r] ' .. ADDON .. ' is not designed for players under level 10, and almost certainly will not operate properly!')
-		end
+		local firstRun = not Opt.frequency
 		InitOpts()
 		UI:UpdateDraggable()
 		UI:UpdateAlpha()
 		UI:UpdateScale()
-		UI:SnapAllPanels()
+		if firstRun then
+			print('It looks like this is your first time running ' .. ADDON .. ', why don\'t you take some time to familiarize yourself with the commands?')
+			print('Type |cFFFFD000' .. SLASH_GoodHunting1 .. '|r for a list of commands.')
+			UI:SnapAllPanels()
+		end
+		if UnitLevel('player') < 10 then
+			print('[|cFFFFD000Warning|r] ' .. ADDON .. ' is not designed for players under level 10, and almost certainly will not operate properly!')
+		end
 	end
 end
 
@@ -2854,11 +2247,11 @@ CombatEvent.TRIGGER = function(timeStamp, event, _, srcGUID, _, _, _, dstGUID, _
 	then
 		e = 'UNIT_DIED'
 	elseif (
-	   e == 'RANGE_DAMAGE' or
 	   e == 'SPELL_CAST_START' or
 	   e == 'SPELL_CAST_SUCCESS' or
 	   e == 'SPELL_CAST_FAILED' or
 	   e == 'SPELL_DAMAGE' or
+	   e == 'SPELL_ENERGIZE' or
 	   e == 'SPELL_PERIODIC_DAMAGE' or
 	   e == 'SPELL_MISSED' or
 	   e == 'SPELL_AURA_APPLIED' or
@@ -2875,7 +2268,7 @@ end
 CombatEvent.UNIT_DIED = function(event, srcGUID, dstGUID)
 	trackAuras:Remove(dstGUID)
 	if Opt.auto_aoe then
-		autoAoe:Remove(dstGUID)
+		AutoAoe:Remove(dstGUID)
 	end
 end
 
@@ -2883,12 +2276,12 @@ CombatEvent.SWING_DAMAGE = function(event, srcGUID, dstGUID, amount, overkill, s
 	if srcGUID == Player.guid then
 		Player:ResetSwing(not offHand, offHand)
 		if Opt.auto_aoe then
-			autoAoe:Add(dstGUID, true)
+			AutoAoe:Add(dstGUID, true)
 		end
 	elseif dstGUID == Player.guid then
 		Player.swing.last_taken = Player.time
 		if Opt.auto_aoe then
-			autoAoe:Add(srcGUID, true)
+			AutoAoe:Add(srcGUID, true)
 		end
 	end
 end
@@ -2897,17 +2290,17 @@ CombatEvent.SWING_MISSED = function(event, srcGUID, dstGUID, missType, offHand, 
 	if srcGUID == Player.guid then
 		Player:ResetSwing(not offHand, offHand, true)
 		if Opt.auto_aoe and not (missType == 'EVADE' or missType == 'IMMUNE') then
-			autoAoe:Add(dstGUID, true)
+			AutoAoe:Add(dstGUID, true)
 		end
 	elseif dstGUID == Player.guid then
 		Player.swing.last_taken = Player.time
 		if Opt.auto_aoe then
-			autoAoe:Add(srcGUID, true)
+			AutoAoe:Add(srcGUID, true)
 		end
 	end
 end
 
-CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellSchool, missType)
+CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellSchool, missType, overCap, powerType)
 	if not (srcGUID == Player.guid or srcGUID == Player.pet.guid) then
 		return
 	end
@@ -2920,7 +2313,7 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 		end
 	end
 
-	local ability = spellId and abilities.bySpellId[spellId]
+	local ability = spellId and Abilities.bySpellId[spellId]
 	if not ability then
 		--print(format('EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d', event, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0))
 		return
@@ -2928,14 +2321,13 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 
 	UI:UpdateCombatWithin(0.05)
 	if event == 'SPELL_CAST_SUCCESS' then
-		ability:CastSuccess(dstGUID)
-		return
+		return ability:CastSuccess(dstGUID)
 	elseif event == 'SPELL_CAST_START' then
-		ability:CastStart(dstGUID)
-		return
-	elseif event == 'SPELL_CAST_FAILED' then
-		ability:CastFailed(dstGUID, missType)
-		return
+		return ability.CastStart and ability:CastStart(dstGUID)
+	elseif event == 'SPELL_CAST_FAILED'  then
+		return ability.CastFailed and ability:CastFailed(dstGUID, missType)
+	elseif event == 'SPELL_ENERGIZE' then
+		return ability.Energize and ability:Energize(missType, overCap, powerType)
 	end
 	if ability.aura_targets then
 		if event == 'SPELL_AURA_APPLIED' then
@@ -2946,63 +2338,84 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 			ability:RemoveAura(dstGUID)
 		end
 	end
-	if dstGUID == Player.guid or dstGUID == Player.pet.guid then
+	if dstGUID == Player.guid then
+		if event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
+			ability.last_gained = Player.time
+		end
 		return -- ignore buffs beyond here
 	end
 	if Opt.auto_aoe then
-		if event == 'SPELL_MISSED' and (missType == 'EVADE' or missType == 'IMMUNE') then
-			autoAoe:Remove(dstGUID)
+		if event == 'SPELL_MISSED' and (missType == 'EVADE' or (missType == 'IMMUNE' and not ability.ignore_immune)) then
+			AutoAoe:Remove(dstGUID)
 		elseif ability.auto_aoe and (event == ability.auto_aoe.trigger or ability.auto_aoe.trigger == 'SPELL_AURA_APPLIED' and event == 'SPELL_AURA_REFRESH') then
 			ability:RecordTargetHit(dstGUID)
 		end
 	end
-	if event == 'RANGE_DAMAGE' or event == 'SPELL_DAMAGE' or event == 'SPELL_ABSORBED' or event == 'SPELL_MISSED' or event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
+	if event == 'SPELL_DAMAGE' or event == 'SPELL_ABSORBED' or event == 'SPELL_MISSED' or event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
 		ability:CastLanded(dstGUID, event, missType)
 	end
 end
 
-function events:COMBAT_LOG_EVENT_UNFILTERED()
+function Events:COMBAT_LOG_EVENT_UNFILTERED()
 	CombatEvent.TRIGGER(CombatLogGetCurrentEventInfo())
 end
 
-function events:PLAYER_TARGET_CHANGED()
+function Events:PLAYER_TARGET_CHANGED()
 	Target:Update()
-	if Player.rescan_abilities then
-		Player:UpdateAbilities()
-	end
 end
 
-function events:UNIT_FACTION(unitID)
-	if unitID == 'target' then
+function Events:UNIT_FACTION(unitId)
+	if unitId == 'target' then
 		Target:Update()
 	end
 end
 
-function events:UNIT_FLAGS(unitID)
-	if unitID == 'target' then
+function Events:UNIT_FLAGS(unitId)
+	if unitId == 'target' then
 		Target:Update()
 	end
 end
 
-function events:UNIT_SPELLCAST_START(unitID, castGUID, spellId)
-	if Opt.interrupt and unitID == 'target' then
+function Events:UNIT_HEALTH(unitId)
+	if unitId == 'player' then
+		Player.health.current = UnitHealth('player')
+		Player.health.max = UnitHealthMax('player')
+		Player.health.pct = Player.health.current / Player.health.max * 100
+	end
+end
+
+function Events:UNIT_SPELLCAST_START(unitId, castGUID, spellId)
+	if Opt.interrupt and unitId == 'target' then
 		UI:UpdateCombatWithin(0.05)
 	end
 end
 
-function events:UNIT_SPELLCAST_STOP(unitID, castGUID, spellId)
-	if Opt.interrupt and unitID == 'target' then
+function Events:UNIT_SPELLCAST_STOP(unitId, castGUID, spellId)
+	if Opt.interrupt and unitId == 'target' then
 		UI:UpdateCombatWithin(0.05)
 	end
 end
-events.UNIT_SPELLCAST_FAILED = events.UNIT_SPELLCAST_STOP
-events.UNIT_SPELLCAST_INTERRUPTED = events.UNIT_SPELLCAST_STOP
+Events.UNIT_SPELLCAST_FAILED = Events.UNIT_SPELLCAST_STOP
+Events.UNIT_SPELLCAST_INTERRUPTED = Events.UNIT_SPELLCAST_STOP
 
-function events:UNIT_SPELLCAST_SUCCEEDED(unitID, castGUID, spellId)
-	if unitID ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
+function Events:UNIT_SPELLCAST_SENT(unitId, destName, castGUID, spellId)
+	if unitId ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
 		return
 	end
-	local ability = abilities.bySpellId[spellId]
+	local ability = Abilities.bySpellId[spellId]
+	if not ability then
+		return
+	end
+	if ability == FeignDeath then
+		FeignDeath:CastSuccess(Player.guid)
+	end
+end
+
+function Events:UNIT_SPELLCAST_SUCCEEDED(unitId, castGUID, spellId)
+	if unitId ~= 'player' or not spellId or castGUID:sub(6, 6) ~= '3' then
+		return
+	end
+	local ability = Abilities.bySpellId[spellId]
 	if not ability then
 		return
 	end
@@ -3011,11 +2424,13 @@ function events:UNIT_SPELLCAST_SUCCEEDED(unitID, castGUID, spellId)
 	end
 end
 
-function events:PLAYER_REGEN_DISABLED()
-	Player.combat_start = GetTime() - Player.time_diff
+function Events:PLAYER_REGEN_DISABLED()
+	Player:UpdateTime()
+	Player.combat_start = Player.time
 end
 
-function events:PLAYER_REGEN_ENABLED()
+function Events:PLAYER_REGEN_ENABLED()
+	Player:UpdateTime()
 	Player.combat_start = 0
 	Player.swing.last_taken = 0
 	Player.pet.stuck = false
@@ -3025,24 +2440,17 @@ function events:PLAYER_REGEN_ENABLED()
 		Player.last_ability = nil
 		ghPreviousPanel:Hide()
 	end
-	for _, ability in next, abilities.velocity do
+	for _, ability in next, Abilities.velocity do
 		for guid in next, ability.traveling do
 			ability.traveling[guid] = nil
 		end
 	end
 	if Opt.auto_aoe then
-		for _, ability in next, abilities.autoAoe do
-			ability.auto_aoe.start_time = nil
-			for guid in next, ability.auto_aoe.targets do
-				ability.auto_aoe.targets[guid] = nil
-			end
-		end
-		autoAoe:Clear()
-		autoAoe:Update()
+		AutoAoe:Clear()
 	end
 end
 
-function events:PLAYER_EQUIPMENT_CHANGED()
+function Events:PLAYER_EQUIPMENT_CHANGED()
 	local _, equipType, hasCooldown
 	Trinket1.itemId = GetInventoryItemID('player', 13) or 0
 	Trinket2.itemId = GetInventoryItemID('player', 14) or 0
@@ -3070,27 +2478,35 @@ function events:PLAYER_EQUIPMENT_CHANGED()
 		end
 	end
 
-	Player.set_bonus.t28 = (Player:Equipped(188859) and 1 or 0) + (Player:Equipped(188861) and 1 or 0) + (Player:Equipped(188856) and 1 or 0) + (Player:Equipped(188858) and 1 or 0) + (Player:Equipped(188860) and 1 or 0)
+	Player.set_bonus.t29 = (Player:Equipped(200387) and 1 or 0) + (Player:Equipped(200389) and 1 or 0) + (Player:Equipped(200390) and 1 or 0) + (Player:Equipped(200391) and 1 or 0) + (Player:Equipped(200392) and 1 or 0)
+	Player.set_bonus.t30 = (Player:Equipped(202477) and 1 or 0) + (Player:Equipped(202478) and 1 or 0) + (Player:Equipped(202479) and 1 or 0) + (Player:Equipped(202480) and 1 or 0) + (Player:Equipped(202482) and 1 or 0)
 
 	Player:ResetSwing(true, true)
 	Player:UpdateAbilities()
 end
 
-function events:PLAYER_SPECIALIZATION_CHANGED(unitId)
+function Events:PLAYER_SPECIALIZATION_CHANGED(unitId)
 	if unitId ~= 'player' then
 		return
 	end
 	Player.spec = GetSpecialization() or 0
 	ghPreviousPanel.ability = nil
 	Player:SetTargetMode(1)
-	events:PLAYER_EQUIPMENT_CHANGED()
-	events:PLAYER_REGEN_ENABLED()
-	events:SPELL_UPDATE_ICON()
+	Events:PLAYER_EQUIPMENT_CHANGED()
+	Events:PLAYER_REGEN_ENABLED()
+	Events:SPELL_UPDATE_ICON()
+	Events:UNIT_HEALTH('player')
 	UI.OnResourceFrameShow()
+	Target:Update()
 	Player:Update()
 end
 
-function events:SPELL_UPDATE_COOLDOWN()
+
+function Events:TRAIT_CONFIG_UPDATED()
+	Events:PLAYER_SPECIALIZATION_CHANGED('player')
+end
+
+function Events:SPELL_UPDATE_COOLDOWN()
 	if Opt.spell_swipe then
 		local _, start, duration, castStart, castEnd
 		_, _, _, castStart, castEnd = UnitCastingInfo('player')
@@ -3104,33 +2520,31 @@ function events:SPELL_UPDATE_COOLDOWN()
 	end
 end
 
-function events:SPELL_UPDATE_ICON()
+function Events:SPELL_UPDATE_ICON()
 	if WildfireInfusion.known then
 		WildfireInfusion:Update()
 	end
 end
 
-function events:PLAYER_PVP_TALENT_UPDATE()
+function Events:PLAYER_PVP_TALENT_UPDATE()
 	Player:UpdateAbilities()
 end
 
-function events:SOULBIND_ACTIVATED()
-	Player:UpdateAbilities()
-end
-
-function events:SOULBIND_NODE_UPDATED()
-	Player:UpdateAbilities()
-end
-
-function events:SOULBIND_PATH_CHANGED()
-	Player:UpdateAbilities()
-end
-
-function events:ACTIONBAR_SLOT_CHANGED()
+function Events:ACTIONBAR_SLOT_CHANGED()
 	UI:UpdateGlows()
 end
 
-function events:UI_ERROR_MESSAGE(errorId)
+function Events:GROUP_ROSTER_UPDATE()
+	Player.group_size = clamp(GetNumGroupMembers(), 1, 40)
+end
+
+function Events:PLAYER_ENTERING_WORLD()
+	Player:Init()
+	Target:Update()
+	C_Timer.After(5, function() Events:PLAYER_EQUIPMENT_CHANGED() end)
+end
+
+function Events:UI_ERROR_MESSAGE(errorId)
 	if (
 	    errorId == 394 or -- pet is rooted
 	    errorId == 396 or -- target out of pet range
@@ -3138,16 +2552,6 @@ function events:UI_ERROR_MESSAGE(errorId)
 	) then
 		Player.pet.stuck = true
 	end
-end
-
-function events:GROUP_ROSTER_UPDATE()
-	Player.group_size = max(1, min(40, GetNumGroupMembers()))
-end
-
-function events:PLAYER_ENTERING_WORLD()
-	Player:Init()
-	Target:Update()
-	C_Timer.After(5, function() events:PLAYER_EQUIPMENT_CHANGED() end)
 end
 
 ghPanel.button:SetScript('OnClick', function(self, button, down)
@@ -3163,22 +2567,22 @@ ghPanel.button:SetScript('OnClick', function(self, button, down)
 end)
 
 ghPanel:SetScript('OnUpdate', function(self, elapsed)
-	timer.combat = timer.combat + elapsed
-	timer.display = timer.display + elapsed
-	timer.health = timer.health + elapsed
-	if timer.combat >= Opt.frequency then
+	Timer.combat = Timer.combat + elapsed
+	Timer.display = Timer.display + elapsed
+	Timer.health = Timer.health + elapsed
+	if Timer.combat >= Opt.frequency then
 		UI:UpdateCombat()
 	end
-	if timer.display >= 0.05 then
+	if Timer.display >= 0.05 then
 		UI:UpdateDisplay()
 	end
-	if timer.health >= 0.2 then
+	if Timer.health >= 0.2 then
 		Target:UpdateHealth()
 	end
 end)
 
-ghPanel:SetScript('OnEvent', function(self, event, ...) events[event](self, ...) end)
-for event in next, events do
+ghPanel:SetScript('OnEvent', function(self, event, ...) Events[event](self, ...) end)
+for event in next, Events do
 	ghPanel:RegisterEvent(event)
 end
 
@@ -3220,18 +2624,25 @@ SlashCmdList[ADDON] = function(msg, editbox)
 			Opt.locked = msg[2] == 'on'
 			UI:UpdateDraggable()
 		end
+		if Opt.aoe or Opt.snap then
+			Status('Warning', 'Panels cannot be moved when aoe or snap are enabled!')
+		end
 		return Status('Locked', Opt.locked)
 	end
 	if startsWith(msg[1], 'snap') then
 		if msg[2] then
 			if msg[2] == 'above' or msg[2] == 'over' then
 				Opt.snap = 'above'
+				Opt.locked = true
 			elseif msg[2] == 'below' or msg[2] == 'under' then
 				Opt.snap = 'below'
+				Opt.locked = true
 			else
 				Opt.snap = false
-				ghPanel:ClearAllPoints()
+				Opt.locked = false
+				badDragonPanel:ClearAllPoints()
 			end
+			UI:UpdateDraggable()
 			UI.OnResourceFrameShow()
 		end
 		return Status('Snap to the Personal Resource Display frame', Opt.snap)
@@ -3265,12 +2676,12 @@ SlashCmdList[ADDON] = function(msg, editbox)
 			end
 			return Status('Interrupt ability icon scale', Opt.scale.interrupt, 'times')
 		end
-		if startsWith(msg[2], 'ex') or startsWith(msg[2], 'pet') then
+		if startsWith(msg[2], 'ex') then
 			if msg[3] then
 				Opt.scale.extra = tonumber(msg[3]) or 0.4
 				UI:UpdateScale()
 			end
-			return Status('Extra/Pet cooldown ability icon scale', Opt.scale.extra, 'times')
+			return Status('Extra cooldown ability icon scale', Opt.scale.extra, 'times')
 		end
 		if msg[2] == 'glow' then
 			if msg[3] then
@@ -3279,11 +2690,11 @@ SlashCmdList[ADDON] = function(msg, editbox)
 			end
 			return Status('Action button glow scale', Opt.scale.glow, 'times')
 		end
-		return Status('Default icon scale options', '|cFFFFD000prev 0.7|r, |cFFFFD000main 1|r, |cFFFFD000cd 0.7|r, |cFFFFD000interrupt 0.4|r, |cFFFFD000pet 0.4|r, and |cFFFFD000glow 1|r')
+		return Status('Default icon scale options', '|cFFFFD000prev 0.7|r, |cFFFFD000main 1|r, |cFFFFD000cd 0.7|r, |cFFFFD000interrupt 0.4|r, |cFFFFD000extra 0.4|r, and |cFFFFD000glow 1|r')
 	end
 	if msg[1] == 'alpha' then
 		if msg[2] then
-			Opt.alpha = max(0, min(100, tonumber(msg[2]) or 100)) / 100
+			Opt.alpha = clamp(tonumber(msg[2]) or 100, 0, 100) / 100
 			UI:UpdateAlpha()
 		end
 		return Status('Icon transparency', Opt.alpha * 100 .. '%')
@@ -3316,12 +2727,12 @@ SlashCmdList[ADDON] = function(msg, editbox)
 			end
 			return Status('Glowing ability buttons (interrupt icon)', Opt.glow.interrupt)
 		end
-		if startsWith(msg[2], 'ex') or startsWith(msg[2], 'pet') then
+		if startsWith(msg[2], 'ex') then
 			if msg[3] then
 				Opt.glow.extra = msg[3] == 'on'
 				UI:UpdateGlows()
 			end
-			return Status('Glowing ability buttons (extra/pet cooldown icon)', Opt.glow.extra)
+			return Status('Glowing ability buttons (extra cooldown icon)', Opt.glow.extra)
 		end
 		if startsWith(msg[2], 'bliz') then
 			if msg[3] then
@@ -3332,14 +2743,14 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		end
 		if msg[2] == 'color' then
 			if msg[5] then
-				Opt.glow.color.r = max(0, min(1, tonumber(msg[3]) or 0))
-				Opt.glow.color.g = max(0, min(1, tonumber(msg[4]) or 0))
-				Opt.glow.color.b = max(0, min(1, tonumber(msg[5]) or 0))
+				Opt.glow.color.r = clamp(tonumber(msg[3]) or 0, 0, 1)
+				Opt.glow.color.g = clamp(tonumber(msg[4]) or 0, 0, 1)
+				Opt.glow.color.b = clamp(tonumber(msg[5]) or 0, 0, 1)
 				UI:UpdateGlowColorAndScale()
 			end
 			return Status('Glow color', '|cFFFF0000' .. Opt.glow.color.r, '|cFF00FF00' .. Opt.glow.color.g, '|cFF0000FF' .. Opt.glow.color.b)
 		end
-		return Status('Possible glow options', '|cFFFFD000main|r, |cFFFFD000cd|r, |cFFFFD000interrupt|r, |cFFFFD000pet|r, |cFFFFD000blizzard|r, and |cFFFFD000color')
+		return Status('Possible glow options', '|cFFFFD000main|r, |cFFFFD000cd|r, |cFFFFD000interrupt|r, |cFFFFD000extra|r, |cFFFFD000blizzard|r, and |cFFFFD000color')
 	end
 	if startsWith(msg[1], 'prev') then
 		if msg[2] then
@@ -3397,21 +2808,21 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		if msg[2] then
 			if startsWith(msg[2], 'b') then
 				Opt.hide.beastmastery = not Opt.hide.beastmastery
-				events:PLAYER_SPECIALIZATION_CHANGED('player')
+				Events:PLAYER_SPECIALIZATION_CHANGED('player')
 				return Status('Beast Mastery specialization', not Opt.hide.beastmastery)
 			end
 			if startsWith(msg[2], 'm') then
 				Opt.hide.marksmanship = not Opt.hide.marksmanship
-				events:PLAYER_SPECIALIZATION_CHANGED('player')
+				Events:PLAYER_SPECIALIZATION_CHANGED('player')
 				return Status('Marksmanship specialization', not Opt.hide.marksmanship)
 			end
 			if startsWith(msg[2], 's') then
 				Opt.hide.survival = not Opt.hide.survival
-				events:PLAYER_SPECIALIZATION_CHANGED('player')
+				Events:PLAYER_SPECIALIZATION_CHANGED('player')
 				return Status('Survival specialization', not Opt.hide.survival)
 			end
 		end
-		return Status('Possible hidespec options', '|cFFFFD000beastmastery|r/|cFFFFD000marksmanship|r/|cFFFFD000survival|r ')
+		return Status('Possible hidespec options', '|cFFFFD000beastmastery|r/|cFFFFD000marksmanship|r/|cFFFFD000survival|r')
 	end
 	if startsWith(msg[1], 'int') then
 		if msg[2] then
@@ -3478,7 +2889,7 @@ SlashCmdList[ADDON] = function(msg, editbox)
 		'miss |cFF00C000on|r/|cFFC00000off|r - red border around previous ability when it fails to hit',
 		'aoe |cFF00C000on|r/|cFFC00000off|r - allow clicking main ability icon to toggle amount of targets (disables moving)',
 		'bossonly |cFF00C000on|r/|cFFC00000off|r - only use cooldowns on bosses',
-		'hidespec |cFFFFD000beastmastery|r/|cFFFFD000marksmanship|r/|cFFFFD000survival|r  - toggle disabling ' .. ADDON .. ' for specializations',
+		'hidespec |cFFFFD000beastmastery|r/|cFFFFD000marksmanship|r/|cFFFFD000survival|r - toggle disabling ' .. ADDON .. ' for specializations',
 		'interrupt |cFF00C000on|r/|cFFC00000off|r - show an icon for interruptable spells',
 		'auto |cFF00C000on|r/|cFFC00000off|r  - automatically change target mode on AoE spells',
 		'ttl |cFFFFD000[seconds]|r  - time target exists in auto AoE after being hit (default is 10 seconds)',
