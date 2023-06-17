@@ -551,6 +551,7 @@ function Ability:Add(spellId, buff, player, spellId2)
 		known = false,
 		rank = 0,
 		focus_cost = 0,
+		focus_gain = 0,
 		cooldown_duration = 0,
 		buff_duration = 0,
 		tick_interval = 0,
@@ -718,6 +719,10 @@ function Ability:Cost()
 	return self.focus_cost
 end
 
+function Ability:Gain()
+	return self.focus_gain
+end
+
 function Ability:ChargesFractional()
 	local charges, max_charges, recharge_start, recharge_time = GetSpellCharges(self.spellId)
 	if self:Casting() then
@@ -776,11 +781,15 @@ function Ability:CastTime()
 end
 
 function Ability:CastRegen()
-	return Player.focus.regen * self:CastTime() - self:Cost()
+	return Player.focus.regen * self:CastTime() - self:Cost() + self:Gain()
 end
 
-function Ability:WontCapFocus(reduction)
-	return (Player.focus.current + self:CastRegen()) < (Player.focus.max - (reduction or 5))
+function Ability:WillCapFocus(reduction)
+	return (Player.focus.current + self:CastRegen()) >= (Player.focus.max - (reduction or 5))
+end
+
+function Ability:WontCapFocus(...)
+	return not self:WillCapFocus(...)
 end
 
 function Ability:Previous(n)
@@ -1044,6 +1053,7 @@ CounterShot.triggers_gcd = false
 local DeathChakram = Ability:Add(375891, false, true, 375893)
 DeathChakram.buff_duration = 10
 DeathChakram.cooldown_duration = 45
+DeathChakram.focus_gain = 3 * 7 -- 3 focus times 7 hits within the GCD
 DeathChakram:SetVelocity(30)
 DeathChakram:AutoAoe()
 local ExplosiveShot = Ability:Add(212431, false, true)
@@ -1215,6 +1225,7 @@ local FlankingStrike = Ability:Add(269751, false, true, 269752)
 FlankingStrike.cooldown_duration = 30
 FlankingStrike.requires_pet = true
 FlankingStrike.max_range = 5
+FlankingStrike.focus_gain = 30
 local FuryOfTheEagle = Ability:Add(203415, true, true, 203413)
 FuryOfTheEagle.buff_duration = 4
 FuryOfTheEagle.cooldown_duration = 45
@@ -1225,13 +1236,14 @@ Harpoon.cooldown_duration = 30
 Harpoon.buff_duration = 3
 Harpoon.triggers_gcd = false
 Harpoon.max_range = 30
+local IntenseFocus = Ability:Add(385709, true, true)
 local InternalBleeding = Ability:Add(270343, false, true) -- Shrapnel Bomb DoT applied by Raptor Strike/Mongoose Bite/Carve
 InternalBleeding.buff_duration = 9
 InternalBleeding.tick_interval = 3
 InternalBleeding.hasted_ticks = true
 local KillCommand = Ability:Add(259489, false, true)
-KillCommand.focus_cost = -15
 KillCommand.cooldown_duration = 6
+KillCommand.focus_gain = 15
 KillCommand.hasted_cooldown = true
 KillCommand.requires_charge = true
 KillCommand.requires_pet = true
@@ -1254,6 +1266,7 @@ PheromoneBomb.hasted_cooldown = true
 PheromoneBomb.requires_charge = true
 PheromoneBomb:SetVelocity(30)
 PheromoneBomb:AutoAoe(false, 'apply')
+local Ranger = Ability:Add(385695, false, true)
 local RaptorStrike = Ability:Add(186270, false, true)
 RaptorStrike.focus_cost = 30
 RaptorStrike.max_range = 5
@@ -1738,6 +1751,14 @@ function SerpentSting:Remains()
 	return Ability.Remains(self)
 end
 
+function KillCommand:Gain()
+	local gain = Ability.Gain(self)
+	if IntenseFocus.known then
+		gain = gain + 6
+	end
+	return gain
+end
+
 function KillShot:Usable()
 	if not Ability.Usable(self) then
 		return false
@@ -1746,6 +1767,9 @@ function KillShot:Usable()
 		return true
 	end
 	if HuntersPrey.known and HuntersPrey:Up() then
+		return true
+	end
+	if CoordinatedAssault.known and CoordinatedAssault.empower:Up() then
 		return true
 	end
 	return false
@@ -1846,7 +1870,327 @@ APL[SPEC.MARKSMANSHIP].Main = function(self)
 end
 
 APL[SPEC.SURVIVAL].Main = function(self)
+	if CallPet1:Usable() then
+		UseExtra(CallPet1)
+	elseif RevivePet:Usable() then
+		UseExtra(RevivePet)
+	elseif MendPet:Usable() then
+		UseExtra(MendPet)
+	end
+	if Player:TimeInCombat() == 0 then
+--[[
+actions.precombat=flask
+actions.precombat+=/augmentation
+actions.precombat+=/food
+actions.precombat+=/variable,name=mb_rs_cost,op=setif,value=action.mongoose_bite.cost,value_else=action.raptor_strike.cost,condition=talent.mongoose_bite
+actions.precombat+=/summon_pet
+actions.precombat+=/snapshot_stats
+actions.precombat+=/use_item,name=algethar_puzzle_box
+actions.precombat+=/steel_trap,precast_time=2
+]]
+		if Opt.pot and not Player:InArenaOrBattleground() then
 
+		end
+		if Harpoon:Usable() then
+			UseCooldown(Harpoon)
+		end
+	end
+--[[
+actions=auto_attack
+actions+=/call_action_list,name=cds
+actions+=/call_action_list,name=st,if=active_enemies<3
+actions+=/call_action_list,name=cleave,if=active_enemies>2
+actions+=/arcane_torrent
+]]
+	self.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or (CoordinatedAssault.known and CoordinatedAssault:Up()) or (Spearhead.known and Spearhead:Up())
+	self.mb_rs_cost = MongooseBite.known and MongooseBite:Cost() or RaptorStrike:Cost()
+	if self.use_cds then
+		self:cds()
+	end
+	if Player.enemies > 2 then
+		return self:cleave()
+	end
+	return self:st()
+end
+
+APL[SPEC.SURVIVAL].cds = function(self)
+--[[
+actions.cds=blood_fury,if=buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault
+actions.cds+=/harpoon,if=talent.terms_of_engagement.enabled&focus<focus.max
+actions.cds+=/ancestral_call,if=buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault
+actions.cds+=/fireblood,if=buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault
+actions.cds+=/lights_judgment
+actions.cds+=/bag_of_tricks,if=cooldown.kill_command.full_recharge_time>gcd
+actions.cds+=/berserking,if=buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault|time_to_die<13
+actions.cds+=/muzzle
+actions.cds+=/potion,if=target.time_to_die<25|buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault
+actions.cds+=/use_item,name=algethar_puzzle_box,use_off_gcd=1,if=gcd.remains>gcd.max-0.1
+actions.cds+=/use_item,name=manic_grieftorch,use_off_gcd=1,if=gcd.remains>gcd.max-0.1&!buff.spearhead.up
+actions.cds+=/use_items,use_off_gcd=1,if=gcd.remains>gcd.max-0.1&!buff.spearhead.up
+actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
+]]
+	if Opt.trinket then
+		if Trinket1:Usable() then
+			return UseCooldown(Trinket1)
+		elseif Trinket2:Usable() then
+			return UseCooldown(Trinket2)
+		end
+	end
+end
+
+APL[SPEC.SURVIVAL].cleave = function(self)
+--[[
+actions.cleave=kill_command,if=debuff.shredded_armor.down&set_bonus.tier30_4pc&target.time_to_die>6
+actions.cleave+=/kill_shot,if=buff.coordinated_assault_empower.up
+actions.cleave+=/wildfire_bomb,if=full_recharge_time<gcd|!cooldown.coordinated_assault.remains|buff.coordinated_assault.remains&!buff.coordinated_assault_empower.up
+actions.cleave+=/death_chakram
+actions.cleave+=/stampede
+actions.cleave+=/coordinated_assault,if=cooldown.fury_of_the_eagle.remains|!talent.fury_of_the_eagle
+actions.cleave+=/explosive_shot
+actions.cleave+=/carve,if=cooldown.wildfire_bomb.full_recharge_time>spell_targets%2
+actions.cleave+=/butchery,if=full_recharge_time<gcd|dot.shrapnel_bomb.ticking&(dot.internal_bleeding.stack<2|dot.shrapnel_bomb.remains<gcd)
+actions.cleave+=/wildfire_bomb,if=!dot.wildfire_bomb.ticking
+actions.cleave+=/fury_of_the_eagle
+actions.cleave+=/carve,if=dot.shrapnel_bomb.ticking
+actions.cleave+=/flanking_strike,if=focus+cast_regen<focus.max
+actions.cleave+=/butchery,if=(!next_wi_bomb.shrapnel|!talent.wildfire_infusion)
+actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison.stack,if=debuff.latent_poison.stack>8
+actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack,if=debuff.latent_poison.stack>8
+actions.cleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&full_recharge_time<gcd
+actions.cleave+=/carve
+actions.cleave+=/kill_shot,if=!buff.coordinated_assault.up
+actions.cleave+=/steel_trap,if=focus+cast_regen<focus.max
+actions.cleave+=/spearhead
+actions.cleave+=/mongoose_bite,target_if=min:dot.serpent_sting.remains,if=buff.spearhead.remains
+actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&target.time_to_die>8&(!talent.vipers_venom|talent.hydras_bite)
+actions.cleave+=/mongoose_bite,target_if=min:dot.serpent_sting.remains
+actions.cleave+=/raptor_strike,target_if=min:dot.serpent_sting.remains
+]]
+	if ShreddedArmor.known and KillCommand:Usable() and ShreddedArmor:Down() and Target.timeToDie > 6 then
+		return KillCommand
+	end
+	if KillShot:Usable() and CoordinatedAssault.empower:Up() then
+		return KillShot
+	end
+	if WildfireBomb:Usable() and (
+		(WildfireBomb:FullRechargeTime() < Player.gcd) or
+		(CoordinatedAssault.known and (CoordinatedAssault:Ready() or (CoordinatedAssault:Up() and CoordinatedAssault.empower:Down())))
+	) then
+		return WildfireBomb
+	end
+	if self.use_cds then
+		if DeathChakram:Usable() then
+			UseCooldown(DeathChakram)
+		elseif Stampede:Usable() then
+			UseCooldown(Stampede)
+		elseif CoordinatedAssault:Usable() and (not FuryOfTheEagle.known or not FuryOfTheEagle:Ready()) then
+			UseCooldown(CoordinatedAssault)
+		elseif ExplosiveShot:Usable() and Target.timeToDie > ExplosiveShot:Duration() then
+			UseCooldown(ExplosiveShot)
+		end
+	end
+	if Carve:Usable() and WildfireBomb:FullRechargeTime() > (Player.enemies / 2) then
+		return Carve
+	end
+	if Butchery:Usable() and (
+		(Butchery:FullRechargeTime() < Player.gcd) or
+		(ShrapnelBomb.known and ShrapnelBomb:Ticking() > 0 and (InternalBleeding:Stack() < 2 or ShrapnelBomb:Remains() < Player.gcd))
+	) then
+		return Butchery
+	end
+	if WildfireBomb:Usable() and (
+		(not WildfireInfusion.known and WildfireBomb:Down()) or
+		(WildfireInfusion.known and (not WildfireInfusion.current or WildfireInfusion.current:Down()))
+	) then
+		return WildfireBomb
+	end
+	if self.use_cds and FuryOfTheEagle:Usable() then
+		UseCooldown(FuryOfTheEagle)
+	end
+	if ShrapnelBomb.known and Carve:Usable() and ShrapnelBomb:Ticking() > 0 then
+		return Carve
+	end
+	if FlankingStrike:Usable() and FlankingStrike:WontFocusCap() then
+		return FlankingStrike
+	end
+	if Butchery:Usable() and (not ShrapnelBomb.known or not ShrapnelBomb.next) then
+		return Butchery
+	end
+	if PoisonInjection.known and MongooseBite:Usable() and LatentPoison:Stack() > 8 then
+		return MongooseBite
+	end
+	if PoisonInjection.known and RaptorStrike:Usable() and LatentPoison:Stack() > 8 then
+		return RaptorStrike
+	end
+	if KillCommand:Usable() and KillCommand:WontCapFocus() and KillCommand:FullRechargeTime() < Player.gcd then
+		return KillCommand
+	end
+	if Carve:Usable() then
+		return Carve
+	end
+	if KillShot:Usable() and (not CoordinatedAssault.known or CoordinatedAssault:Down()) then
+		return KillShot
+	end
+	if self.use_cds and SteelTrap:Usable() and SteelTrap:WontCapFocus() then
+		UseCooldown(SteelTrap)
+	end
+	if Spearhead.known then
+		if self.use_cds and Spearhead:Usable() then
+			UseCooldown(Spearhead)
+		end
+		if MongooseBite:Usable() and Spearhead:Up() then
+			return MongooseBite
+		end
+	end
+	if SerpentSting:Usable() and SerpentSting:Refreshable() and Target.timeToDie > (SerpentSting:Remains() + (SerpentSting:TickTime() * 3)) and (not VipersVenom.known or HydrasBite.known) then
+		return SerpentSting
+	end
+	if MongooseBite:Usable() then
+		return MongooseBite
+	end
+	if RaptorStrike:Usable() then
+		return RaptorStrike
+	end
+end
+
+APL[SPEC.SURVIVAL].st = function(self)
+--[[
+actions.st=death_chakram,if=focus+cast_regen<focus.max|talent.spearhead&!cooldown.spearhead.remains
+actions.st+=/spearhead,if=focus+action.kill_command.cast_regen>focus.max-10&(cooldown.death_chakram.remains|!talent.death_chakram)
+actions.st+=/kill_shot,if=buff.coordinated_assault_empower.up
+actions.st+=/wildfire_bomb,if=(raid_event.adds.in>cooldown.wildfire_bomb.full_recharge_time-(cooldown.wildfire_bomb.full_recharge_time%3.5)&debuff.shredded_armor.up&(full_recharge_time<2*gcd|talent.bombardier&!cooldown.coordinated_assault.remains|talent.bombardier&buff.coordinated_assault.up&buff.coordinated_assault.remains<2*gcd)|!raid_event.adds.exists&time_to_die<7)&set_bonus.tier30_4pc
+actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=full_recharge_time<gcd&focus+cast_regen<focus.max&buff.deadly_duo.stack>1
+actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=cooldown.wildfire_bomb.full_recharge_time<2*gcd&debuff.shredded_armor.down&set_bonus.tier30_4pc
+actions.st+=/mongoose_bite,if=buff.spearhead.remains
+actions.st+=/mongoose_bite,if=active_enemies=1&target.time_to_die<focus%(variable.mb_rs_cost-cast_regen)*gcd|buff.mongoose_fury.up&buff.mongoose_fury.remains<gcd
+actions.st+=/kill_shot,if=!buff.coordinated_assault.up
+actions.st+=/raptor_strike,if=active_enemies=1&target.time_to_die<focus%(variable.mb_rs_cost-cast_regen)*gcd
+actions.st+=/serpent_sting,target_if=min:remains,if=!dot.serpent_sting.ticking&target.time_to_die>7&!talent.vipers_venom
+actions.st+=/mongoose_bite,if=talent.alpha_predator&buff.mongoose_fury.up&buff.mongoose_fury.remains<focus%(variable.mb_rs_cost-cast_regen)*gcd
+actions.st+=/flanking_strike,if=focus+cast_regen<focus.max
+actions.st+=/stampede
+actions.st+=/coordinated_assault,if=!talent.coordinated_kill&target.health.pct<20&(!buff.spearhead.remains&cooldown.spearhead.remains|!talent.spearhead)|talent.coordinated_kill&(!buff.spearhead.remains&cooldown.spearhead.remains|!talent.spearhead)
+actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=full_recharge_time<gcd&focus+cast_regen<focus.max&(cooldown.flanking_strike.remains|!talent.flanking_strike)|debuff.shredded_armor.down&set_bonus.tier30_4pc
+actions.st+=/mongoose_bite,if=dot.shrapnel_bomb.ticking
+actions.st+=/serpent_sting,target_if=min:remains,if=refreshable&!talent.vipers_venom
+actions.st+=/wildfire_bomb,if=raid_event.adds.in>cooldown.wildfire_bomb.full_recharge_time-(cooldown.wildfire_bomb.full_recharge_time%3.5)&full_recharge_time<gcd&(!set_bonus.tier29_2pc|active_enemies>1)
+actions.st+=/mongoose_bite,target_if=max:debuff.latent_poison.stack,if=buff.mongoose_fury.up
+actions.st+=/explosive_shot,if=talent.ranger
+actions.st+=/wildfire_bomb,if=raid_event.adds.in>cooldown.wildfire_bomb.full_recharge_time-(cooldown.wildfire_bomb.full_recharge_time%3.5)&(full_recharge_time<gcd|!dot.wildfire_bomb.ticking&set_bonus.tier30_4pc)
+actions.st+=/mongoose_bite,target_if=max:debuff.latent_poison.stack,if=focus+action.kill_command.cast_regen>focus.max-10|set_bonus.tier30_4pc
+actions.st+=/raptor_strike,target_if=max:debuff.latent_poison.stack
+actions.st+=/steel_trap
+actions.st+=/wildfire_bomb,if=raid_event.adds.in>cooldown.wildfire_bomb.full_recharge_time-(cooldown.wildfire_bomb.full_recharge_time%3.5)&!dot.wildfire_bomb.ticking
+actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
+actions.st+=/coordinated_assault,if=!talent.coordinated_kill&time_to_die>140
+actions.st+=/fury_of_the_eagle,interrupt=1
+]]
+	if self.use_cds and DeathChakram:Usable() and (DeathChakram:WontCapFocus() or (Spearhead.known and Spearhead:Ready())) then
+		UseCooldown(DeathChakram)
+	end
+	if self.use_cds and Spearhead:Usable() and KillCommand:WillCapFocus(10) and (not DeathChakram.known or not DeathChakram:Ready()) then
+		UseCooldown(Spearhead)
+	end
+	if CoordinatedAssault.known and KillShot:Usable() and CoordinatedAssault.empower:Up() then
+		return KillShot
+	end
+	if ShreddedArmor.known and WildfireBomb:Usable() and ShreddedArmor:Up() and (
+		(Target.boss and Target.timeToDie < 7) or
+		(WildfireBomb:FullRechargeTime() < (2 * Player.gcd)) or
+		(Bombardier.known and (CoordinatedAssault:Ready() or (CoordinatedAssault:Up() and CoordinatedAssault:Remains() < (2 * Player.gcd))))
+	) then
+		return WildfireBomb
+	end
+	if KillCommand:Usable() and (
+		(DeadlyDuo.known and DeadlyDuo:Stack() > 1 and KillCommand:FullRechargeTime() < Player.gcd and KillCommand:WontCapFocus()) or
+		(ShreddedArmor.known and ShreddedArmor:Down() and WildfireBomb:FullRechargeTime() < (2 * Player.gcd))
+	) then
+		return KillCommand
+	end
+	if MongooseBite:Usable() and (
+		(Spearhead.known and Spearhead:Up()) or
+		between(MongooseFury:Remains(), 0.2, Player.gcd + 0.2) or
+		(Player.enemies <= 1 and Target.timeToDie < (Player.focus.current / (self.mb_rs_cost - MongooseBite:CastRegen()) * Player.gcd))
+	) then
+		return MongooseBite
+	end
+	if KillShot:Usable() and (not CoordinatedAssault.known or CoordinatedAssault:Down()) then
+		return KillShot
+	end
+	if RaptorStrike:Usable() and (
+		(Player.enemies <= 1 and Target.timeToDie < (Player.focus.current / (self.mb_rs_cost - RaptorStrike:CastRegen()) * Player.gcd))
+	) then
+		return MongooseBite
+	end
+	if not VipersVenom.known and SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 3) then
+		return SerpentSting
+	end
+	if AlphaPredator.known and MongooseBite:Usable() and between(MongooseFury:Remains(), 0.2, Player.focus.current / (self.mb_rs_cost - MongooseBite:CastRegen()) * Player.gcd) then
+		return MongooseBite
+	end
+	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
+		return FlankingStrike
+	end
+	if Stampede:Usable() then
+		UseCooldown(Stampede)
+	end
+	if CoordinatedAssault:Usable() and (not Spearhead.known or (Spearhead:Down() and not Spearhead:Ready())) and (CoordinatedKill.known or Target.health.pct < 20) then
+		UseCooldown(CoordinatedAssault)
+	end
+	if KillCommand:Usable() and (
+		(KillCommand:FullRechargeTime() < Player.gcd and KillCommand:WontCapFocus() and (not FlankingStrike.known or not FlankingStrike:Ready())) or
+		(ShreddedArmor.known and ShreddedArmor:Down())
+	) then
+		return KillCommand
+	end
+	if ShrapnelBomb.known and MongooseBite:Usable() and ShrapnelBomb:Up() then
+		return MongooseBite
+	end
+	if not VipersVenom.known and SerpentSting:Usable() and SerpentSting:Refreshable() then
+		return SerpentSting
+	end
+	if WildfireBomb:Usable() and WildfireBomb:FullRechargeTime() < Player.gcd and (not ExposedWound.known or Player.enemies > 1) then
+		return WildfireBomb
+	end
+	if MongooseBite:Usable() and MongooseFury:Remains() > 0.2 then
+		return MongooseBite
+	end
+	if Ranger.known and ExplosiveShot:Usable() then
+		UseCooldown(ExplosiveShot)
+	end
+	if WildfireBomb:Usable() and (
+		(WildfireBomb:FullRechargeTime() < Player.gcd) or
+		(ShreddedArmor.known and (
+			(not WildfireInfusion.known and WildfireBomb:Down()) or
+			(WildfireInfusion.known and (not WildfireInfusion.current or WildfireInfusion.current:Down()))
+		))
+	) then
+		return WildfireBomb
+	end
+	if MongooseBite:Usable() and (ShreddedArmor.known or KillCommand:WillCapFocus(10)) then
+		return MongooseBite
+	end
+	if RaptorStrike:Usable() then
+		return RaptorStrike
+	end
+	if self.use_cds and SteelTrap:Usable() then
+		UseCooldown(SteelTrap)
+	end
+	if WildfireBomb:Usable() and (
+		(not WildfireInfusion.known and WildfireBomb:Down()) or
+		(WildfireInfusion.known and (not WildfireInfusion.current or WildfireInfusion.current:Down()))
+	) then
+		return WildfireBomb
+	end
+	if KillCommand:Usable() and KillCommand:WontCapFocus() then
+		return KillCommand
+	end
+	if self.use_cds and not CoordinatedKill.known and CoordinatedAssault:Usable() and Target.timeToDie > 140 then
+		UseCooldown(CoordinatedAssault)
+	end
+	if FuryOfTheEagle:Usable() then
+		UseCooldown(FuryOfTheEagle)
+	end
 end
 
 APL.Interrupt = function(self)
