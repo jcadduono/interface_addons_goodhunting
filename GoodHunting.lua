@@ -2005,7 +2005,7 @@ actions.cleave+=/flanking_strike
 			UseCooldown(Stampede)
 		elseif CoordinatedAssault:Usable() and (not FuryOfTheEagle.known or not FuryOfTheEagle:Ready()) then
 			UseCooldown(CoordinatedAssault)
-		elseif ExplosiveShot:Usable() and Target.timeToDie > ExplosiveShot:Duration() then
+		elseif ExplosiveShot:Usable() then
 			UseCooldown(ExplosiveShot)
 		end
 	end
@@ -2217,7 +2217,7 @@ actions.st+=/coordinated_assault,if=!talent.coordinated_kill&time_to_die>140
 	if MongooseBite:Usable() and MongooseFury:Remains() > 0.2 then
 		return MongooseBite
 	end
-	if Ranger.known and ExplosiveShot:Usable() then
+	if Ranger.known and ExplosiveShot:Usable() and (Player.enemies > 1 or Target.timeToDie > ExplosiveShot:Duration()) then
 		UseCooldown(ExplosiveShot)
 	end
 	if RuthlessMarauder.known and FuryOfTheEagle:Usable() and (not DjaruunPillarOfTheElderFlame:Equipped() or not DjaruunPillarOfTheElderFlame:Ready(40)) and Target.health.pct < (5 + (30 * RuthlessMarauder.rank)) then
