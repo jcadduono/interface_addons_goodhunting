@@ -1029,6 +1029,7 @@ WingClip.focus_cost = 20
 local AlphaPredator = Ability:Add(269737, false, true)
 local ArcticBola = Ability:Add(390231, false, true, 390232)
 ArcticBola.buff_duration = 3
+ArcticBola.talent_node = 79815
 ArcticBola.ignore_immune = true
 ArcticBola:SetVelocity(35)
 ArcticBola:AutoAoe()
@@ -1080,6 +1081,7 @@ LatentPoison.buff_duration = 15
 local MasterMarksman = Ability:Add(260309, false, true, 269576)
 MasterMarksman.buff_duration = 6
 MasterMarksman.tick_interval = 2
+MasterMarksman.talent_node = 79913
 local Misdirection = Ability:Add(34477, true, true)
 Misdirection.buff_duration = 30
 Misdirection.cooldown_duration = 30
@@ -1218,8 +1220,10 @@ CoordinatedAssault.requires_pet = true
 CoordinatedAssault.empower = Ability:Add(361738, true, true)
 CoordinatedAssault.empower.buff_duration = 3
 local CoordinatedKill = Ability:Add(385739, false, true)
+CoordinatedKill.talent_node = 79824
 local DeadlyDuo = Ability:Add(378962, true, true, 397568)
 DeadlyDuo.buff_duration = 12
+DeadlyDuo.talent_node = 79869
 local FlankersAdvantage = Ability:Add(263186, false, true)
 local FlankingStrike = Ability:Add(269751, false, true, 269752)
 FlankingStrike.cooldown_duration = 30
@@ -1267,6 +1271,7 @@ PheromoneBomb.requires_charge = true
 PheromoneBomb:SetVelocity(30)
 PheromoneBomb:AutoAoe(false, 'apply')
 local Ranger = Ability:Add(385695, false, true)
+Ranger.talent_node = 79825
 local RaptorStrike = Ability:Add(186270, false, true)
 RaptorStrike.focus_cost = 30
 RaptorStrike.max_range = 5
@@ -1291,6 +1296,7 @@ TermsOfEngagement.buff_duration = 10
 local TipOfTheSpear = Ability:Add(260285, true, true, 260286)
 TipOfTheSpear.buff_duration = 10
 local VipersVenom = Ability:Add(268501, false, true)
+VipersVenom.talent_node = 79826
 local VolatileBomb = Ability:Add(271045, false, true, 271049) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
 VolatileBomb.cooldown_duration = 18
 VolatileBomb.buff_duration = 6
@@ -1771,11 +1777,25 @@ function KillShot:Usable()
 	if Target.health.pct < 20 then
 		return true
 	end
+	if CoordinatedKill.known and CoordinatedAssault:Up() then
+		return true
+	end
 	if HuntersPrey.known and HuntersPrey:Up() then
 		return true
 	end
 	return false
 end
+
+function WildfireBomb:Gain()
+	local gain = Ability.Gain(self)
+	if CoordinatedKill.known and CoordinatedAssault:Up() then
+		gain = gain + (5 * CoordinatedKill.rank)
+	end
+	return gain
+end
+ShrapnelBomb.Gain = WildfireBomb.Gain
+PheromoneBomb.Gain = WildfireBomb.Gain
+VolatileBomb.Gain = WildfireBomb.Gain
 
 -- hack to support Wildfire Bomb's changing spells on each cast
 function WildfireInfusion:Update()
@@ -2410,15 +2430,15 @@ UI.anchor_points = {
 	kui = { -- Kui Nameplates
 		[SPEC.BEASTMASTERY] = {
 			['above'] = { 'BOTTOM', 'TOP', 0, 24 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -1 }
+			['below'] = { 'TOP', 'BOTTOM', 0, 7 }
 		},
 		[SPEC.MARKSMANSHIP] = {
 			['above'] = { 'BOTTOM', 'TOP', 0, 24 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -1 }
+			['below'] = { 'TOP', 'BOTTOM', 0, 7 }
 		},
 		[SPEC.SURVIVAL] = {
 			['above'] = { 'BOTTOM', 'TOP', 0, 24 },
-			['below'] = { 'TOP', 'BOTTOM', 0, -1 }
+			['below'] = { 'TOP', 'BOTTOM', 0, 7 }
 		},
 	},
 }
