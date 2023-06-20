@@ -2034,7 +2034,7 @@ actions.cleave+=/flanking_strike
 	if ShrapnelBomb.known and Carve:Usable() and ShrapnelBomb:Ticking() > 0 then
 		return Carve
 	end
-	if FlankingStrike:Usable() and FlankingStrike:WontFocusCap() then
+	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
 		return FlankingStrike
 	end
 	if Butchery:Usable() and (not ShrapnelBomb.known or not ShrapnelBomb.next) then
@@ -2147,7 +2147,7 @@ actions.st+=/coordinated_assault,if=!talent.coordinated_kill&time_to_die>140
 	end
 	if KillCommand:Usable() and (
 		(KillCommand:FullRechargeTime() < Player.gcd and KillCommand:WontCapFocus() and ((DeadlyDuo.known and DeadlyDuo:Stack() > 2) or (Spearhead.known and Spearhead:Up() and PheromoneBomb:Up()))) or
-		(ShreddedArmor.known and WildfireBomb:FullRechargeTime() < (3 * Player.gcd) and ShreddedArmor:Down() and (not Speadhead.known or Spearhead:Down()))
+		(ShreddedArmor.known and WildfireBomb:FullRechargeTime() < (3 * Player.gcd) and ShreddedArmor:Down() and (not Spearhead.known or Spearhead:Down()))
 	) then
 		return KillCommand
 	end
