@@ -423,6 +423,7 @@ Player.target_modes = {
 		{3, '3'},
 		{4, '4'},
 		{5, '5+'},
+		{7, '7+'},
 	},
 }
 
@@ -1995,7 +1996,7 @@ actions+=/arcane_torrent
 ]]
 	self.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or (CoordinatedAssault.known and CoordinatedAssault:Up()) or (Spearhead.known and Spearhead:Up())
 	self.mb_rs_cost = MongooseBite.known and MongooseBite:Cost() or RaptorStrike:Cost()
-	self.delay_bomb = CoordinatedAssault.known and KillShot.known and Pet.basic_attack and CoordinatedAssault:Up() and Pet.basic_attack:Usable(Player.gcd, true) and KillShot:Usable(Player.gcd, true) and CoordinatedAssault:Remains() > max(KillShot:Cooldown(), Pet.basic_attack:Cooldown())
+	self.delay_bomb = Player.enemies < 7 and CoordinatedAssault.known and KillShot.known and Pet.basic_attack and (BirdsOfPrey.known or Player.enemies < 4) and CoordinatedAssault:Up() and KillShot:Usable(Player.gcd, true) and (CoordinatedAssault.empower:Up() or Pet.basic_attack:Usable(0.2, true)) and CoordinatedAssault:Remains() > max(KillShot:Cooldown(), Pet.basic_attack:Cooldown())
 	if self.use_cds then
 		self:cds()
 	end
