@@ -203,6 +203,10 @@ local Player = {
 			current = 0,
 			max = 100,
 		},
+		focus = {
+			current = 0,
+			max = 100,
+		},
 	},
 	threat = {
 		status = 0,
@@ -1590,6 +1594,8 @@ function Player:UpdatePet()
 	self.pet.guid = UnitGUID('pet')
 	self.pet.alive = self.pet.guid and not UnitIsDead('pet') and true
 	self.pet.active = (self.pet.alive and not self.pet.stuck or IsFlying()) and true
+	self.pet.focus.max = self.pet.active and UnitPowerMax('pet', 2) or 100
+	self.pet.focus.current = UnitPower('pet', 2) + (self.focus.regen * self.execute_remains)
 end
 
 function Player:Update()
