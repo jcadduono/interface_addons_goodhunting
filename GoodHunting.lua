@@ -184,6 +184,7 @@ local Player = {
 	health = {
 		current = 0,
 		max = 100,
+		pct = 100,
 	},
 	cast = {
 		start = 0,
@@ -194,19 +195,6 @@ local Player = {
 		current = 0,
 		regen = 0,
 		max = 100,
-	},
-	pet = {
-		active = false,
-		alive = false,
-		stuck = false,
-		health = {
-			current = 0,
-			max = 100,
-		},
-		focus = {
-			current = 0,
-			max = 100,
-		},
 	},
 	threat = {
 		status = 0,
@@ -238,6 +226,22 @@ local Player = {
 		[203729] = true, -- Ominous Chromatic Essence
 	},
 	main_freecast = false,
+	major_cd_remains = 0,
+}
+
+local Pet = {
+	active = false,
+	alive = false,
+	stuck = false,
+	health = {
+		current = 0,
+		max = 100,
+		pct = 100,
+	},
+	focus = {
+		current = 0,
+		max = 100,
+	},
 }
 
 -- current target information
@@ -564,8 +568,12 @@ function Ability:Add(spellId, buff, player, spellId2)
 		last_gained = 0,
 		last_used = 0,
 		aura_target = buff and 'player' or 'target',
-		aura_filter = (buff and 'HELPFUL' or 'HARMFUL') .. (player and '|PLAYER' or '')
+		aura_filter = (buff and 'HELPFUL' or 'HARMFUL') .. (player and '|PLAYER' or ''),
+		pet_spell = player == 'pet',
 	}
+	if ability.pet_spell then
+		ability.aura_target = buff and 'pet' or 'target'
+	end
 	setmetatable(ability, self)
 	Abilities.all[#Abilities.all + 1] = ability
 	return ability
@@ -590,10 +598,10 @@ function Ability:Usable(seconds, pool)
 	if not self.known then
 		return false
 	end
-	if not pool and self:Cost() > Player.focus.current then
+	if (self.requires_pet or self.pet_spell) and not Pet.active then
 		return false
 	end
-	if self.requires_pet and not Player.pet.active then
+	if not pool and self:Cost() > (self.pet_spell and Pet.focus.current or Player.focus.current) then
 		return false
 	end
 	if self.requires_charge and self:Charges() == 0 then
@@ -856,13 +864,19 @@ function Ability:Targets()
 end
 
 function Ability:CastFailed(dstGUID, missType)
-	if self.requires_pet and missType == 'No path available' then
-		Player.pet.stuck = true
+	if (self.requires_pet or self.pet_spell) and missType == 'No path available' then
+		Pet.stuck = true
 	end
 end
 
 function Ability:CastSuccess(dstGUID)
 	self.last_used = Player.time
+	if self.requires_pet or self.pet_spell then
+		Pet.stuck = false
+		if self.pet_spell then
+			return
+		end
+	end
 	Player.last_ability = self
 	if self.triggers_gcd then
 		Player.previous_gcd[10] = nil
@@ -873,9 +887,6 @@ function Ability:CastSuccess(dstGUID)
 	end
 	if Opt.auto_aoe and self.auto_aoe and self.auto_aoe.trigger == 'SPELL_CAST_SUCCESS' then
 		AutoAoe:Add(dstGUID, true)
-	end
-	if self.requires_pet then
-		Player.pet.stuck = false
 	end
 	if self.traveling and self.next_castGUID then
 		self.traveling[self.next_castGUID] = {
@@ -1332,6 +1343,16 @@ ShreddedArmor.buff_duration = 8
 -- Trinket effects
 local SeethingRage = Ability:Add(408835, true, true)
 SeethingRage.buff_duration = 10
+-- Pet abilities
+Pet.Bite = Ability:Add(17253, false, 'pet')
+Pet.Bite.cooldown_duration = 3
+Pet.Bite.focus_cost = 25
+Pet.Claw = Ability:Add(16827, false, 'pet')
+Pet.Claw.cooldown_duration = 3
+Pet.Claw.focus_cost = 25
+Pet.Smack = Ability:Add(49966, false, 'pet')
+Pet.Smack.cooldown_duration = 3
+Pet.Smack.focus_cost = 25
 -- End Abilities
 
 -- Start Inventory Items
@@ -1406,7 +1427,35 @@ local Trinket2 = InventoryItem:Add(0)
 local DjaruunPillarOfTheElderFlame = InventoryItem:Add(202569)
 -- End Inventory Items
 
--- Start Player API
+-- Start Abilities Functions
+
+function Abilities:Update()
+	wipe(self.bySpellId)
+	wipe(self.velocity)
+	wipe(self.autoAoe)
+	wipe(self.trackAuras)
+	for _, ability in next, self.all do
+		if ability.known then
+			self.bySpellId[ability.spellId] = ability
+			if ability.spellId2 then
+				self.bySpellId[ability.spellId2] = ability
+			end
+			if ability.velocity > 0 then
+				self.velocity[#self.velocity + 1] = ability
+			end
+			if ability.auto_aoe then
+				self.autoAoe[#self.autoAoe + 1] = ability
+			end
+			if ability.aura_targets then
+				self.trackAuras[#self.trackAuras + 1] = ability
+			end
+		end
+	end
+end
+
+-- End Abilities Functions
+
+-- Start Player Functions
 
 function Player:FocusTimeToMax(focus)
 	local deficit = (focus or self.focus.max) - self.focus.current
@@ -1506,31 +1555,33 @@ function Player:UpdateTime(timeStamp)
 	self.time = self.ctime - self.time_diff
 end
 
-function Player:UpdateAbilities()
+function Player:UpdateKnown()
 	local node
 	local configId = C_ClassTalents.GetActiveConfigID()
 	for _, ability in next, Abilities.all do
-		ability.known = false
-		ability.rank = 0
-		for _, spellId in next, ability.spellIds do
-			ability.spellId, ability.name, _, ability.icon = spellId, GetSpellInfo(spellId)
-			if IsPlayerSpell(spellId) or (ability.learn_spellId and IsPlayerSpell(ability.learn_spellId)) then
-				ability.known = true
-				break
+		if not ability.pet_spell then
+			ability.known = false
+			ability.rank = 0
+			for _, spellId in next, ability.spellIds do
+				ability.spellId, ability.name, _, ability.icon = spellId, GetSpellInfo(spellId)
+				if IsPlayerSpell(spellId) or (ability.learn_spellId and IsPlayerSpell(ability.learn_spellId)) then
+					ability.known = true
+					break
+				end
 			end
-		end
-		if ability.bonus_id then -- used for checking enchants and crafted effects
-			ability.known = self:BonusIdEquipped(ability.bonus_id)
-		end
-		if ability.talent_node and configId then
-			node = C_Traits.GetNodeInfo(configId, ability.talent_node)
-			if node then
-				ability.rank = node.activeRank
-				ability.known = ability.rank > 0
+			if ability.bonus_id then -- used for checking enchants and crafted effects
+				ability.known = self:BonusIdEquipped(ability.bonus_id)
 			end
-		end
-		if C_LevelLink.IsSpellLocked(ability.spellId) or (ability.check_usable and not IsUsableSpell(ability.spellId)) then
-			ability.known = false -- spell is locked, do not mark as known
+			if ability.talent_node and configId then
+				node = C_Traits.GetNodeInfo(configId, ability.talent_node)
+				if node then
+					ability.rank = node.activeRank
+					ability.known = ability.rank > 0
+				end
+			end
+			if C_LevelLink.IsSpellLocked(ability.spellId) or (ability.check_usable and not IsUsableSpell(ability.spellId)) then
+				ability.known = false -- spell is locked, do not mark as known
+			end
 		end
 	end
 
@@ -1553,27 +1604,7 @@ function Player:UpdateAbilities()
 	end
 	SeethingRage.known = DjaruunPillarOfTheElderFlame:Equipped()
 
-	wipe(Abilities.bySpellId)
-	wipe(Abilities.velocity)
-	wipe(Abilities.autoAoe)
-	wipe(Abilities.trackAuras)
-	for _, ability in next, Abilities.all do
-		if ability.known then
-			Abilities.bySpellId[ability.spellId] = ability
-			if ability.spellId2 then
-				Abilities.bySpellId[ability.spellId2] = ability
-			end
-			if ability.velocity > 0 then
-				Abilities.velocity[#Abilities.velocity + 1] = ability
-			end
-			if ability.auto_aoe then
-				Abilities.autoAoe[#Abilities.autoAoe + 1] = ability
-			end
-			if ability.aura_targets then
-				Abilities.trackAuras[#Abilities.trackAuras + 1] = ability
-			end
-		end
-	end
+	Abilities:Update()
 end
 
 function Player:UpdateThreat()
@@ -1588,14 +1619,6 @@ function Player:UpdateThreat()
 			self.threat.lead = max(0, threat_table[1][6] - threat_table[2][6])
 		end
 	end
-end
-
-function Player:UpdatePet()
-	self.pet.guid = UnitGUID('pet')
-	self.pet.alive = self.pet.guid and not UnitIsDead('pet') and true
-	self.pet.active = (self.pet.alive and not self.pet.stuck or IsFlying()) and true
-	self.pet.focus.max = self.pet.active and UnitPowerMax('pet', 2) or 100
-	self.pet.focus.current = UnitPower('pet', 2) + (self.focus.regen * self.execute_remains)
 end
 
 function Player:Update()
@@ -1636,7 +1659,8 @@ function Player:Update()
 	self.swing.oh.remains = max(0, self.swing.oh.last + self.swing.oh.speed - self.time)
 	self.moving = GetUnitSpeed('player') ~= 0
 	self:UpdateThreat()
-	self:UpdatePet()
+
+	Pet:Update()
 
 	trackAuras:Purge()
 	if Opt.auto_aoe then
@@ -1645,6 +1669,11 @@ function Player:Update()
 		end
 		AutoAoe:Purge()
 	end
+
+	self.major_cd_remains = (
+		(AspectOfTheWild.known and AspectOfTheWild:Remains()) or
+		(CoordinatedAssault.known and CoordinatedAssault:Remains())
+	) or 0
 
 	self.main = APL[self.spec]:Main()
 end
@@ -1665,9 +1694,46 @@ function Player:Init()
 	Events:PLAYER_SPECIALIZATION_CHANGED('player')
 end
 
--- End Player API
+-- End Player Functions
 
--- Start Target API
+-- Start Pet Functions
+
+function Pet:UpdateKnown()
+	for _, ability in next, Abilities.all do
+		if ability.pet_spell then
+			ability.known = false
+			ability.rank = 0
+			for _, spellId in next, ability.spellIds do
+				ability.spellId, ability.name, _, ability.icon = spellId, GetSpellInfo(spellId)
+				if IsSpellKnown(spellId, true) then
+					ability.known = true
+					break
+				end
+			end
+		end
+	end
+
+	self.basic_attack = (
+		(self.Bite.known and self.Bite) or
+		(self.Claw.known and self.Claw) or
+		(self.Smack.known and self.Smack)
+	)
+
+	Abilities:Update()
+end
+
+function Pet:Update()
+	self.guid = UnitGUID('pet')
+	self.alive = self.guid and not UnitIsDead('pet')
+	self.active = (self.alive and not self.stuck or IsFlying()) and true
+	self.focus.regen = GetPowerRegenForPowerType(2)
+	self.focus.max = self.active and UnitPowerMax('pet', 2) or 100
+	self.focus.current = UnitPower('pet', 2) + (self.focus.regen * Player.execute_remains)
+end
+
+-- End Pet Functions
+
+-- Start Target Functions
 
 function Target:UpdateHealth(reset)
 	Timer.health = 0
@@ -1745,7 +1811,7 @@ function Target:Stunned()
 	return Intimidation:Up()
 end
 
--- End Target API
+-- End Target Functions
 
 -- Start Ability Modifications
 
@@ -1776,8 +1842,8 @@ function KillCommand:Gain()
 	return gain
 end
 
-function KillShot:Usable()
-	if not Ability.Usable(self) then
+function KillShot:Usable(...)
+	if not Ability.Usable(self, ...) then
 		return false
 	end
 	if Target.health.pct < 20 then
@@ -1828,31 +1894,28 @@ function WildfireInfusion:Update()
 	end
 end
 
-function CallPet1:Usable()
-	if Player.pet.active then
+function CallPet1:Usable(...)
+	if Pet.active then
 		return false
 	end
-	return Ability.Usable(self)
+	return Ability.Usable(self, ...)
 end
 
-function MendPet:Usable()
-	if not Ability.Usable(self) then
-		return false
-	end
+function MendPet:Usable(...)
 	if Opt.mend_threshold <= 0 then
 		return false
 	end
-	if (UnitHealth('pet') / UnitHealthMax('pet') * 100) >= Opt.mend_threshold then
+	if Pet.health.pct >= Opt.mend_threshold then
 		return false
 	end
-	return true
+	return Ability.Usable(self, ...)
 end
 
-function RevivePet:Usable()
-	if not UnitExists('pet') or (UnitExists('pet') and not UnitIsDead('pet')) then
+function RevivePet:Usable(...)
+	if Pet.alive then
 		return false
 	end
-	return Ability.Usable(self)
+	return Ability.Usable(self, ...)
 end
 
 function PetFrenzy:StartDurationStack()
@@ -1932,6 +1995,7 @@ actions+=/arcane_torrent
 ]]
 	self.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or (CoordinatedAssault.known and CoordinatedAssault:Up()) or (Spearhead.known and Spearhead:Up())
 	self.mb_rs_cost = MongooseBite.known and MongooseBite:Cost() or RaptorStrike:Cost()
+	self.delay_bomb = CoordinatedAssault.known and KillShot.known and Pet.basic_attack and CoordinatedAssault:Up() and Pet.basic_attack:Usable(Player.gcd, true) and KillShot:Usable(Player.gcd, true) and CoordinatedAssault:Remains() > max(KillShot:Cooldown(), Pet.basic_attack:Cooldown())
 	if self.use_cds then
 		self:cds()
 	end
@@ -1998,7 +2062,7 @@ actions.cleave+=/flanking_strike
 	if BirdsOfPrey.known and KillShot:Usable() and CoordinatedAssault.empower:Up() then
 		return KillShot
 	end
-	if WildfireBomb:Usable() and (
+	if WildfireBomb:Usable() and not self.delay_bomb and (
 		(WildfireBomb:FullRechargeTime() < Player.gcd) or
 		(CoordinatedAssault.known and (CoordinatedAssault:Ready() or (CoordinatedAssault:Up() and CoordinatedAssault.empower:Down())))
 	) then
@@ -2024,7 +2088,7 @@ actions.cleave+=/flanking_strike
 	) then
 		return Butchery
 	end
-	if WildfireBomb:Usable() and (
+	if WildfireBomb:Usable() and not self.delay_bomb and (
 		(not WildfireInfusion.known and WildfireBomb:Down()) or
 		(WildfireInfusion.known and (not WildfireInfusion.current or WildfireInfusion.current:Down()))
 	) then
@@ -2144,7 +2208,7 @@ actions.st+=/coordinated_assault,if=!talent.coordinated_kill&time_to_die>140
 	if CoordinatedAssault.known and KillShot:Usable() and CoordinatedAssault.empower:Up() then
 		return KillShot
 	end
-	if ShreddedArmor.known and WildfireBomb:Usable() and ShreddedArmor:Up() and (
+	if ShreddedArmor.known and WildfireBomb:Usable() and not self.delay_bomb and ShreddedArmor:Up() and (
 		(Target.boss and Target.timeToDie < 7) or
 		(WildfireBomb:FullRechargeTime() < (2 * Player.gcd)) or
 		(Bombardier.known and (CoordinatedAssault:Ready() or (CoordinatedAssault:Up() and CoordinatedAssault:Remains() < (2 * Player.gcd))))
@@ -2199,19 +2263,19 @@ actions.st+=/coordinated_assault,if=!talent.coordinated_kill&time_to_die>140
 	if KillCommand:Usable() and KillCommand:FullRechargeTime() < Player.gcd and KillCommand:WontCapFocus() and (not FlankingStrike.known or not FlankingStrike:Ready()) then
 		return KillCommand
 	end
-	if VolatileBomb.known and WildfireBomb:Usable() and SerpentSting:Refreshable() and VolatileBomb.next then
+	if VolatileBomb.known and WildfireBomb:Usable() and not self.delay_bomb and SerpentSting:Refreshable() and VolatileBomb.next then
 		return WildfireBomb
 	end
 	if not VipersVenom.known and SerpentSting:Usable() and SerpentSting:Refreshable() then
 		return SerpentSting
 	end
-	if WildfireBomb:Usable() and WildfireBomb:FullRechargeTime() < (2 * Player.gcd) then
+	if WildfireBomb:Usable() and not self.delay_bomb and WildfireBomb:FullRechargeTime() < (2 * Player.gcd) then
 		return WildfireBomb
 	end
 	if ShrapnelBomb.known and MongooseBite:Usable() and ShrapnelBomb:Up() then
 		return MongooseBite
 	end
-	if ShreddedArmor.known and WildfireBomb:Usable() and (
+	if ShreddedArmor.known and WildfireBomb:Usable() and not self.delay_bomb and (
 		Player.enemies > 1 or
 		(ShreddedArmor:Up() and WildfireBomb:WontCapFocus() and (
 			(not WildfireInfusion.known and WildfireBomb:Down()) or
@@ -2238,7 +2302,7 @@ actions.st+=/coordinated_assault,if=!talent.coordinated_kill&time_to_die>140
 	if self.use_cds and SteelTrap:Usable() then
 		UseCooldown(SteelTrap)
 	end
-	if WildfireBomb:Usable() and (
+	if WildfireBomb:Usable() and not self.delay_bomb and (
 		(not WildfireInfusion.known and WildfireBomb:Down()) or
 		(WildfireInfusion.known and (not WildfireInfusion.current or WildfireInfusion.current:Down()))
 	) then
@@ -2272,7 +2336,7 @@ end
 
 -- End Action Priority Lists
 
--- Start UI API
+-- Start UI Functions
 
 function UI.DenyOverlayGlow(actionButton)
 	if not Opt.glow.blizzard and actionButton.overlay then
@@ -2503,7 +2567,7 @@ end
 
 function UI:UpdateDisplay()
 	Timer.display = 0
-	local dim, dim_cd, text_center, text_cd
+	local dim, dim_cd, text_center, text_cd, text_tl
 
 	if Opt.dimmer then
 		dim = not ((not Player.main) or
@@ -2541,9 +2605,13 @@ function UI:UpdateDisplay()
 		ghPanel.border.overlay = border
 		ghPanel.border:SetTexture(ADDON_PATH .. (border or 'border') .. '.blp')
 	end
+	if Player.major_cd_remains > 0 then
+		text_tl = format('%.1f', Player.major_cd_remains)
+	end
 
 	ghPanel.dimmer:SetShown(dim)
 	ghPanel.text.center:SetText(text_center)
+	ghPanel.text.tl:SetText(text_tl)
 	--ghPanel.text.bl:SetText(format('%.1fs', Target.timeToDie))
 	ghCooldownPanel.text:SetText(text_cd)
 	ghCooldownPanel.dimmer:SetShown(dim_cd)
@@ -2619,7 +2687,7 @@ function UI:UpdateCombatWithin(seconds)
 	end
 end
 
--- End UI API
+-- End UI Functions
 
 -- Start Event Handling
 
@@ -2707,15 +2775,15 @@ CombatEvent.SWING_MISSED = function(event, srcGUID, dstGUID, missType, offHand, 
 end
 
 CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellSchool, missType, overCap, powerType)
-	if not (srcGUID == Player.guid or srcGUID == Player.pet.guid) then
+	if not (srcGUID == Player.guid or srcGUID == Pet.guid) then
 		return
 	end
 
-	if srcGUID == Player.pet.guid then
-		if Player.pet.stuck and (event == 'SPELL_CAST_SUCCESS' or event == 'SPELL_DAMAGE' or event == 'SWING_DAMAGE') then
-			Player.pet.stuck = false
-		elseif not Player.pet.stuck and event == 'SPELL_CAST_FAILED' and missType == 'No path available' then
-			Player.pet.stuck = true
+	if srcGUID == Pet.guid then
+		if Pet.stuck and (event == 'SPELL_CAST_SUCCESS' or event == 'SPELL_DAMAGE' or event == 'SWING_DAMAGE') then
+			Pet.stuck = false
+		elseif not Pet.stuck and event == 'SPELL_CAST_FAILED' and missType == 'No path available' then
+			Pet.stuck = true
 		end
 	end
 
@@ -2787,6 +2855,10 @@ function Events:UNIT_HEALTH(unitId)
 		Player.health.current = UnitHealth('player')
 		Player.health.max = UnitHealthMax('player')
 		Player.health.pct = Player.health.current / Player.health.max * 100
+	elseif unitId == 'pet' then
+		Pet.health.current = UnitHealth('pet')
+		Pet.health.max = UnitHealthMax('pet')
+		Pet.health.pct = Pet.health.current / Pet.health.max * 100
 	end
 end
 
@@ -2830,6 +2902,13 @@ function Events:UNIT_SPELLCAST_SUCCEEDED(unitId, castGUID, spellId)
 	end
 end
 
+function Events:UNIT_PET(unitId)
+	if unitId ~= 'player' then
+		return
+	end
+	Pet:UpdateKnown()
+end
+
 function Events:PLAYER_REGEN_DISABLED()
 	Player:UpdateTime()
 	Player.combat_start = Player.time
@@ -2839,7 +2918,7 @@ function Events:PLAYER_REGEN_ENABLED()
 	Player:UpdateTime()
 	Player.combat_start = 0
 	Player.swing.last_taken = 0
-	Player.pet.stuck = false
+	Pet.stuck = false
 	Target.estimated_range = 30
 	wipe(Player.previous_gcd)
 	if Player.last_ability then
@@ -2888,7 +2967,7 @@ function Events:PLAYER_EQUIPMENT_CHANGED()
 	Player.set_bonus.t30 = (Player:Equipped(202477) and 1 or 0) + (Player:Equipped(202478) and 1 or 0) + (Player:Equipped(202479) and 1 or 0) + (Player:Equipped(202480) and 1 or 0) + (Player:Equipped(202482) and 1 or 0)
 
 	Player:ResetSwing(true, true)
-	Player:UpdateAbilities()
+	Player:UpdateKnown()
 end
 
 function Events:PLAYER_SPECIALIZATION_CHANGED(unitId)
@@ -2933,7 +3012,7 @@ function Events:SPELL_UPDATE_ICON()
 end
 
 function Events:PLAYER_PVP_TALENT_UPDATE()
-	Player:UpdateAbilities()
+	Player:UpdateKnown()
 end
 
 function Events:ACTIONBAR_SLOT_CHANGED()
@@ -2956,7 +3035,7 @@ function Events:UI_ERROR_MESSAGE(errorId)
 	    errorId == 396 or -- target out of pet range
 	    errorId == 400    -- no pet path to target
 	) then
-		Player.pet.stuck = true
+		Pet.stuck = true
 	end
 end
 
