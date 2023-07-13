@@ -216,8 +216,8 @@ local Player = {
 		last_taken = 0,
 	},
 	set_bonus = {
-		t29 = 0,
-		t30 = 0,
+		t29 = 0, -- Stormwing Harrier's Camouflage
+		t30 = 0, -- Ashen Predator's Scaleform
 	},
 	previous_gcd = {},-- list of previous GCD abilities
 	item_use_blacklist = { -- list of item IDs with on-use effects we should mark unusable
@@ -230,6 +230,7 @@ local Player = {
 	major_cd_remains = 0,
 }
 
+-- current pet information
 local Pet = {
 	active = false,
 	alive = false,
@@ -707,7 +708,7 @@ end
 
 function Ability:Cooldown()
 	if self.cooldown_duration > 0 and self:Casting() then
-		return self.cooldown_duration
+		return self:CooldownDuration()
 	end
 	local start, duration = GetSpellCooldown(self.spellId)
 	if start == 0 then
@@ -783,7 +784,7 @@ function Ability:Casting()
 end
 
 function Ability:Channeling()
-	return Player.channel.ability == self
+	return UnitChannelInfo('player') == self.name
 end
 
 function Ability:CastTime()
@@ -815,6 +816,10 @@ function Ability:Previous(n)
 		i = i - 1
 	end
 	return Player.previous_gcd[i] == self
+end
+
+function Ability:UsedWithin(seconds)
+	return self.last_used >= (Player.time - seconds)
 end
 
 function Ability:AutoAoe(removeUnaffected, trigger)
@@ -960,7 +965,7 @@ function Ability:ApplyAura(guid)
 	if AutoAoe.blacklist[guid] then
 		return
 	end
-	local aura = {}
+	local aura = self.aura_targets[guid] or {}
 	aura.expires = Player.time + self:Duration()
 	self.aura_targets[guid] = aura
 	return aura
@@ -975,14 +980,14 @@ function Ability:RefreshAura(guid)
 		return self:ApplyAura(guid)
 	end
 	local duration = self:Duration()
-	aura.expires = max(aura.expires, Player.time + min(duration * 1.3, (aura.expires - Player.time) + duration))
+	aura.expires = max(aura.expires, Player.time + min(duration * (self.no_pandemic and 1.0 or 1.3), (aura.expires - Player.time) + duration))
 	return aura
 end
 
 function Ability:RefreshAuraAll()
 	local duration = self:Duration()
 	for guid, aura in next, self.aura_targets do
-		aura.expires = max(aura.expires, Player.time + min(duration * 1.3, (aura.expires - Player.time) + duration))
+		aura.expires = max(aura.expires, Player.time + min(duration * (self.no_pandemic and 1.0 or 1.3), (aura.expires - Player.time) + duration))
 	end
 end
 
@@ -1617,7 +1622,7 @@ function Player:UpdateThreat()
 	self.threat.lead = 0
 	if self.threat.status >= 3 and DETAILS_PLUGIN_TINY_THREAT then
 		local threat_table = DETAILS_PLUGIN_TINY_THREAT.player_list_indexes
-		if threat_table and threat_table[1] and threat_table[2] and threat_table[1][1] == Player.name then
+		if threat_table and threat_table[1] and threat_table[2] and threat_table[1][1] == self.name then
 			self.threat.lead = max(0, threat_table[1][6] - threat_table[2][6])
 		end
 	end
@@ -1952,6 +1957,9 @@ local function Pool(ability, extra)
 end
 
 -- Begin Action Priority Lists
+
+APL[SPEC.NONE].Main = function(self)
+end
 
 APL[SPEC.BEASTMASTERY].Main = function(self)
 
@@ -2581,7 +2589,7 @@ end
 
 function UI:UpdateDisplay()
 	Timer.display = 0
-	local dim, dim_cd, text_center, text_cd, text_tl
+	local border, dim, dim_cd, text_center, text_cd, text_tl
 
 	if Opt.dimmer then
 		dim = not ((not Player.main) or
@@ -2921,6 +2929,7 @@ function Events:UNIT_PET(unitId)
 		return
 	end
 	Pet:UpdateKnown()
+	Pet:Update()
 end
 
 function Events:PLAYER_REGEN_DISABLED()
