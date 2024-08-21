@@ -1,20 +1,23 @@
 <Bindings>
-	<Binding name="Toggle Targets +" header="GOODHUNTING" category="ADDONS">
+	<Binding name="GOODHUNTING_TARGETMORE" category="BINDING_CATEGORY_GOODHUNTING">
 		GoodHunting_ToggleTargetMode()
 	</Binding>
-	<Binding name="Toggle Targets -" category="ADDONS">
+	<Binding name="GOODHUNTING_TARGETLESS" category="BINDING_CATEGORY_GOODHUNTING">
 		GoodHunting_ToggleTargetModeReverse()
 	</Binding>
-	<Binding name="Set Targets to 1" category="ADDONS">
+	<Binding name="GOODHUNTING_TARGET1" category="BINDING_CATEGORY_GOODHUNTING">
 		GoodHunting_SetTargetMode(1)
 	</Binding>
-	<Binding name="Set Targets to 2" category="ADDONS">
+	<Binding name="GOODHUNTING_TARGET2" category="BINDING_CATEGORY_GOODHUNTING">
 		GoodHunting_SetTargetMode(2)
 	</Binding>
-	<Binding name="Set Targets to 3" category="ADDONS">
+	<Binding name="GOODHUNTING_TARGET3" category="BINDING_CATEGORY_GOODHUNTING">
 		GoodHunting_SetTargetMode(3)
 	</Binding>
-	<Binding name="Set Targets to 4+" category="ADDONS">
+	<Binding name="GOODHUNTING_TARGET4" category="BINDING_CATEGORY_GOODHUNTING">
 		GoodHunting_SetTargetMode(4)
+	</Binding>
+	<Binding name="GOODHUNTING_TARGET5" category="BINDING_CATEGORY_GOODHUNTING">
+		GoodHunting_SetTargetMode(5)
 	</Binding>
 </Bindings>
