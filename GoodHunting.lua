@@ -2244,7 +2244,7 @@ actions.precombat=summon_pet
 actions.precombat+=/use_item,name=imperfect_ascendancy_serum
 actions.precombat+=/snapshot_stats
 ]]
-		if HuntersMark:Usable() and HuntersMark:Down() and Target:TimeToPct(80) > 10 then
+		if HuntersMark:Usable() and HuntersMark:Down() and Target:TimeToPct(80) > 20 then
 			UseCooldown(HuntersMark)
 		elseif Harpoon:Usable() then
 			UseCooldown(Harpoon)
@@ -2297,7 +2297,7 @@ actions.cds+=/use_item,name=mad_queens_mandate,if=(time_to_die<10|time_to_die>12
 actions.cds+=/use_items,if=cooldown.coordinated_assault.remains|cooldown.spearhead.remains
 actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
 ]]
-	if HuntersMark:Usable() and HuntersMark:Down() and Target:TimeToPct(80) > 15 then
+	if HuntersMark:Usable() and HuntersMark:Down() and Target:TimeToPct(80) > 20 then
 		return UseCooldown(HuntersMark)
 	end
 	if Opt.trinket then
@@ -2438,11 +2438,12 @@ actions.sentcleave+=/coordinated_assault,if=!talent.bombardier|talent.bombardier
 actions.sentcleave+=/fury_of_the_eagle,if=buff.tip_of_the_spear.stack>0
 actions.sentcleave+=/flanking_strike,if=(buff.tip_of_the_spear.stack=2|buff.tip_of_the_spear.stack=1)
 actions.sentcleave+=/kill_shot,if=buff.deathblow.remains&talent.sic_em
-actions.sentcleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
+actions.sentcleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&buff.tip_of_the_spear.stack<3
 actions.sentcleave+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0
+actions.sentcleave+=/kill_shot,if=active_enemies<5
+actions.sentcleave+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!talent.contagious_reagents&(focus>40&buff.tip_of_the_spear.stack<1|buff.tip_of_the_spear.stack>=3|focus>60)
+actions.sentcleave+=/raptor_bite,target_if=max:dot.serpent_sting.remains,if=talent.contagious_reagents
 actions.sentcleave+=/kill_command,target_if=min:bloodseeker.remains
-actions.sentcleave+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!talent.contagious_reagents
-actions.sentcleave+=/raptor_bite,target_if=max:dot.serpent_sting.remains
 ]]
 	if LunarStorm.known and WildfireBomb:Usable() and LunarStorm:Ready() then
 		return WildfireBomb
@@ -2481,29 +2482,24 @@ actions.sentcleave+=/raptor_bite,target_if=max:dot.serpent_sting.remains
 	if TipOfTheSpear.known and KillCommand:Usable() and KillCommand:WontCapFocus() and TipOfTheSpear:Stack() < TipOfTheSpear:MaxStack() then
 		return KillCommand
 	end
-	if WildfireBomb:Usable() and WildfireBomb.dot:Down() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
-		return WildfireBomb
-	end
-	if KillCommand:Usable() and (TipOfTheSpear:Stack() < TipOfTheSpear:MaxStack() or (Target.timeToDie > 4 and Bloodseeker:Down())) then
-		return KillCommand
-	end
 	if WildfireBomb:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
 		return WildfireBomb
 	end
-	if KillShot:Usable() then
+	if KillShot:Usable() and Player.enemies < 5 then
 		return KillShot
 	end
 	if RaptorBite:Usable() and (
-		(not TipOfTheSpear.known or not between(TipOfTheSpear:Stack(), 1, 2)) or
-		(ContagiousReagents.known and SerpentSting:Up())
+		(not ContagiousReagents.known and (
+			Player.focus.current > 60 or
+			(Player.focus.current > 40 and (not TipOfTheSpear.known or TipOfTheSpear:Stack() == 0)) or
+			(TipOfTheSpear.known and TipOfTheSpear:Stack() >= TipOfTheSpear:MaxStack())
+		)) or
+		(ContagiousReagents.known and (SerpentSting:Up() or SerpentSting:Ticking() == 0))
 	) then
 		return RaptorBite
 	end
 	if KillCommand:Usable() then
 		return KillCommand
-	end
-	if RaptorBite:Usable() and Player.focus.current > 60 then
-		return RaptorBite
 	end
 end
 
