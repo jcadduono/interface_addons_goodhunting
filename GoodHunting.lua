@@ -1367,6 +1367,8 @@ Sentinel.max_stack = 10
 Sentinel.no_pandemic = true
 Sentinel.damage = Ability:Add(450412, false, true)
 local SymphonicArsenal = Ability:Add(450383, false, true, 451194)
+-- Aliases
+local RaptorBite = RaptorStrike
 -- Tier set bonuses
 
 -- PvP talents
@@ -1780,7 +1782,8 @@ function Player:UpdateKnown()
 		end
 	end
 
-	SerpentSting.known = true
+	RaptorBite = MongooseBite.known and MongooseBite or RaptorStrike
+	SerpentSting.known = RaptorBite.known
 	Bloodseeker.buff.known = Bloodseeker.known
 	ExplosiveShot.explosion.known = ExplosiveShot.known
 	if MongooseBite.known then
@@ -2241,7 +2244,9 @@ actions.precombat=summon_pet
 actions.precombat+=/use_item,name=imperfect_ascendancy_serum
 actions.precombat+=/snapshot_stats
 ]]
-		if Harpoon:Usable() then
+		if HuntersMark:Usable() and HuntersMark:Down() and Target:TimeToPct(80) > 10 then
+			UseCooldown(HuntersMark)
+		elseif Harpoon:Usable() then
 			UseCooldown(Harpoon)
 		end
 	end
@@ -2292,6 +2297,9 @@ actions.cds+=/use_item,name=mad_queens_mandate,if=(time_to_die<10|time_to_die>12
 actions.cds+=/use_items,if=cooldown.coordinated_assault.remains|cooldown.spearhead.remains
 actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
 ]]
+	if HuntersMark:Usable() and HuntersMark:Down() and Target:TimeToPct(80) > 15 then
+		return UseCooldown(HuntersMark)
+	end
 	if Opt.trinket then
 		if Trinket1:Usable() then
 			return UseCooldown(Trinket1)
@@ -2365,7 +2373,58 @@ actions.sentst+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0&cooldown.lunar_s
 actions.sentst+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!talent.contagious_reagents
 actions.sentst+=/raptor_bite,target_if=max:dot.serpent_sting.remains
 ]]
-
+	if LunarStorm.known and WildfireBomb:Usable() and LunarStorm:Ready() then
+		return WildfireBomb
+	end
+	if RelentlessPrimalFerocity.known and KillCommand:Usable() and RelentlessPrimalFerocity:Up() and TipOfTheSpear:Down() then
+		return KillCommand
+	end
+	if self.use_cds and Spearhead:Usable() and CoordinatedAssault:Up() and (Target.boss or Target.timeToDie > 6) then
+		UseCooldown(Spearhead)
+	end
+	if RaptorBite:Usable() and (
+		(SerpentSting:Down() and Target.timeToDie > 12 and (not ContagiousReagents.known or SerpentSting:Ticking() == 0)) or
+		(ContagiousReagents.known and SerpentSting:Up() and SerpentSting:Ticking() < Player.enemies)
+	) then
+		return RaptorBite
+	end
+	if self.use_cds and FlankingStrike:Usable() and (not TipOfTheSpear.known or between(TipOfTheSpear:Stack(), 1, 2)) then
+		UseCooldown(FlankingStrike)
+	end
+	if WildfireBomb:Usable() and (not LunarStorm.known or LunarStorm:Cooldown() > (WildfireBomb:FullRechargeTime() - Player.gcd)) and (
+		WildfireBomb:ChargesFractional() > 1.9 or
+		(TipOfTheSpear.known and TipOfTheSpear:Up() and WildfireBomb:ChargesFractional() > 1.7) or
+		(self.use_cds and Bombardier.known and CoordinatedAssault:Ready(Player.gcd * 2))
+	) then
+		return WildfireBomb
+	end
+	if Butchery:Usable() then
+		return Butchery
+	end
+	if self.use_cds and CoordinatedAssault:Usable() and (not Bombardier.known or WildfireBomb:ChargesFractional() < 1) then
+		UseCooldown(CoordinatedAssault)
+	end
+	if ExplosiveShot:Usable() and (Player.enemies > 1 or Target.timeToDie > ExplosiveShot:Duration()) then
+		return ExplosiveShot
+	end
+	if self.use_cds and FuryOfTheEagle:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
+		UseCooldown(FuryOfTheEagle)
+	end
+	if KillShot:Usable() then
+		return KillShot
+	end
+	if KillCommand:Usable() and (
+		(FlankingStrike.known and TipOfTheSpear:Down() and FlankingStrike:Ready(Player.gcd)) or
+		(KillCommand:WontCapFocus() and (not RelentlessPrimalFerocity.known or RelentlessPrimalFerocity:Down() or (TipOfTheSpear.known and TipOfTheSpear:Stack() < 2) or Player.focus.current < 30))
+	) then
+		return KillCommand
+	end
+	if WildfireBomb:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) and (not LunarStorm.known or LunarStorm:Cooldown() > WildfireBomb:FullRechargeTime()) then
+		return WildfireBomb
+	end
+	if RaptorBite:Usable() then
+		return RaptorBite
+	end
 end
 
 APL[SPEC.SURVIVAL].sentcleave = function(self)
@@ -2385,7 +2444,67 @@ actions.sentcleave+=/kill_command,target_if=min:bloodseeker.remains
 actions.sentcleave+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!talent.contagious_reagents
 actions.sentcleave+=/raptor_bite,target_if=max:dot.serpent_sting.remains
 ]]
-
+	if LunarStorm.known and WildfireBomb:Usable() and LunarStorm:Ready() then
+		return WildfireBomb
+	end
+	if RelentlessPrimalFerocity.known and KillCommand:Usable() and RelentlessPrimalFerocity:Up() and TipOfTheSpear:Down() then
+		return KillCommand
+	end
+	if WildfireBomb:Usable() and (
+		WildfireBomb:ChargesFractional() > 1.9 or
+		(TipOfTheSpear.known and TipOfTheSpear:Up() and WildfireBomb:ChargesFractional() > 1.7) or
+		(self.use_cds and Bombardier.known and CoordinatedAssault:Ready(Player.gcd * 2)) or
+		(Butchery.known and Butchery:Ready(Player.gcd))
+	) then
+		return WildfireBomb
+	end
+	if Butchery:Usable() then
+		return Butchery
+	end
+	if ExplosiveShot:Usable() and (Player.enemies > 1 or Target.timeToDie > ExplosiveShot:Duration()) then
+		return ExplosiveShot
+	end
+	if self.use_cds then
+		if CoordinatedAssault:Usable() and (not Bombardier.known or WildfireBomb:ChargesFractional() < 1) then
+			UseCooldown(CoordinatedAssault)
+		end
+		if FuryOfTheEagle:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
+			UseCooldown(FuryOfTheEagle)
+		end
+		if FlankingStrike:Usable() and (not TipOfTheSpear.known or between(TipOfTheSpear:Stack(), 1, 2)) then
+			UseCooldown(FlankingStrike)
+		end
+	end
+	if SicEm.known and KillShot:Usable() and Deathblow:Up() then
+		return KillShot
+	end
+	if TipOfTheSpear.known and KillCommand:Usable() and KillCommand:WontCapFocus() and TipOfTheSpear:Stack() < TipOfTheSpear:MaxStack() then
+		return KillCommand
+	end
+	if WildfireBomb:Usable() and WildfireBomb.dot:Down() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
+		return WildfireBomb
+	end
+	if KillCommand:Usable() and (TipOfTheSpear:Stack() < TipOfTheSpear:MaxStack() or (Target.timeToDie > 4 and Bloodseeker:Down())) then
+		return KillCommand
+	end
+	if WildfireBomb:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
+		return WildfireBomb
+	end
+	if KillShot:Usable() then
+		return KillShot
+	end
+	if RaptorBite:Usable() and (
+		(not TipOfTheSpear.known or not between(TipOfTheSpear:Stack(), 1, 2)) or
+		(ContagiousReagents.known and SerpentSting:Up())
+	) then
+		return RaptorBite
+	end
+	if KillCommand:Usable() then
+		return KillCommand
+	end
+	if RaptorBite:Usable() and Player.focus.current > 60 then
+		return RaptorBite
+	end
 end
 
 APL.Interrupt = function(self)
