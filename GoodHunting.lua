@@ -160,7 +160,7 @@ local Abilities = {
 	bySpellId = {},
 	velocity = {},
 	autoAoe = {},
-	trackAuras = {},
+	tracked = {},
 }
 
 -- summoned pet template
@@ -180,6 +180,9 @@ local AutoAoe = {
 	blacklist = {},
 	ignored_units = {},
 }
+
+-- methods for tracking ticking debuffs on targets
+local TrackedAuras = {}
 
 -- timers for updating combat/display/hp info
 local Timer = {
@@ -229,6 +232,7 @@ local Player = {
 		current = 0,
 		regen = 0,
 		max = 100,
+		deficit = 100,
 	},
 	cast = {
 		start = 0,
@@ -267,10 +271,6 @@ local Player = {
 		last_taken = 0,
 	},
 	set_bonus = {
-		t29 = 0, -- Stormwing Harrier's Camouflage
-		t30 = 0, -- Ashen Predator's Scaleform
-		t31 = 0, -- Blazing Dreamstalker's Trophies
-		t32 = 0, -- Stormwing Harrier's Camouflage (Awakened)
 		t33 = 0, -- Lightless Scavenger's Necessities
 	},
 	previous_gcd = {},-- list of previous GCD abilities
@@ -325,6 +325,14 @@ Target.Dummies = {
 	[194649] = true,
 	[197833] = true,
 	[198594] = true,
+	[219250] = true,
+	[225983] = true,
+	[225984] = true,
+	[225985] = true,
+	[225976] = true,
+	[225977] = true,
+	[225978] = true,
+	[225982] = true,
 }
 
 -- Start AoE
@@ -526,7 +534,7 @@ function Ability:Ready(seconds)
 	return self:Cooldown() <= (seconds or 0) and (not self.requires_react or self:React() > (seconds or 0))
 end
 
-function Ability:Usable(seconds)
+function Ability:Usable(seconds, pool)
 	if not self.known then
 		return false
 	end
@@ -559,6 +567,10 @@ function Ability:Remains()
 		end
 	end
 	return 0
+end
+
+function Ability:React()
+	return self:Remains()
 end
 
 function Ability:Expiring(seconds)
@@ -722,12 +734,24 @@ function Ability:Stack()
 	return 0
 end
 
+function Ability:MaxStack()
+	return self.max_stack
+end
+
+function Ability:Capped(deficit)
+	return self:Stack() >= (self:MaxStack() - (deficit or 0))
+end
+
 function Ability:Cost()
 	return self.focus_cost
 end
 
 function Ability:Gain()
 	return self.focus_gain
+end
+
+function Ability:Free()
+	return self.focus_cost > 0 and self:Cost() == 0
 end
 
 function Ability:ChargesFractional()
@@ -889,9 +913,6 @@ function Ability:CastSuccess(dstGUID)
 		Player.previous_gcd[10] = nil
 		table.insert(Player.previous_gcd, 1, self)
 	end
-	if self.aura_targets and self.requires_react then
-		self:RemoveAura(self.aura_target == 'player' and Player.guid or dstGUID)
-	end
 	if Opt.auto_aoe and self.auto_aoe and self.auto_aoe.trigger == 'SPELL_CAST_SUCCESS' then
 		AutoAoe:Add(dstGUID, true)
 	end
@@ -946,10 +967,8 @@ end
 
 -- Start DoT tracking
 
-local trackAuras = {}
-
-function trackAuras:Purge()
-	for _, ability in next, Abilities.trackAuras do
+function TrackedAuras:Purge()
+	for _, ability in next, Abilities.tracked do
 		for guid, aura in next, ability.aura_targets do
 			if aura.expires <= Player.time then
 				ability:RemoveAura(guid)
@@ -958,13 +977,13 @@ function trackAuras:Purge()
 	end
 end
 
-function trackAuras:Remove(guid)
-	for _, ability in next, Abilities.trackAuras do
+function TrackedAuras:Remove(guid)
+	for _, ability in next, Abilities.tracked do
 		ability:RemoveAura(guid)
 	end
 end
 
-function Ability:TrackAuras()
+function Ability:Track()
 	self.aura_targets = {}
 end
 
@@ -1049,6 +1068,13 @@ MendPet.requires_pet = true
 MendPet.aura_target = 'pet'
 local RevivePet = Ability:Add(982, false, true)
 RevivePet.focus_cost = 35
+local SerpentSting = Ability:Add(259491, false, true)
+SerpentSting.buff_duration = 12
+SerpentSting.tick_interval = 3
+SerpentSting.hasted_ticks = true
+SerpentSting:SetVelocity(60)
+SerpentSting:AutoAoe(false, 'apply')
+SerpentSting:Track()
 local SteadyShot = Ability:Add(56641, false, true)
 SteadyShot:SetVelocity(75)
 local WingClip = Ability:Add(195645, false, true)
@@ -1056,19 +1082,18 @@ WingClip.buff_duration = 15
 WingClip.focus_cost = 20
 ------ Talents
 local AlphaPredator = Ability:Add(269737, false, true)
-local ArcticBola = Ability:Add(390231, false, true, 390232)
-ArcticBola.buff_duration = 3
-ArcticBola.talent_node = 79815
-ArcticBola.ignore_immune = true
-ArcticBola:SetVelocity(35)
-ArcticBola:AutoAoe()
 local Barrage = Ability:Add(120360, false, true, 120361)
+Barrage.buff_duration = 3
 Barrage.cooldown_duration = 20
 Barrage.focus_cost = 60
 Barrage:AutoAoe()
 local BindingShot = Ability:Add(109248, false, true, 117405)
 BindingShot.buff_duration = 10
 BindingShot.cooldown_duration = 45
+local BurstingShot = Ability:Add(186387, false, true)
+BurstingShot.buff_duration = 6
+BurstingShot.cooldown_duration = 30
+BurstingShot.focus_cost = 10
 local Camouflage = Ability:Add(199483, true, true)
 Camouflage.buff_duration = 60
 Camouflage.cooldown_duration = 60
@@ -1080,12 +1105,9 @@ local CounterShot = Ability:Add(147362, false, true)
 CounterShot.buff_duration = 3
 CounterShot.cooldown_duration = 24
 CounterShot.triggers_gcd = false
-local DeathChakram = Ability:Add(375891, false, true, 375893)
-DeathChakram.buff_duration = 10
-DeathChakram.cooldown_duration = 45
-DeathChakram.focus_gain = 3 * 7 -- 3 focus times 7 hits within the GCD
-DeathChakram:SetVelocity(30)
-DeathChakram:AutoAoe()
+local Deathblow = Ability:Add(343248, true, true, 378770)
+Deathblow.buff_duration = 12
+Deathblow.max_stack = 1
 local ExplosiveShot = Ability:Add(212431, false, true)
 ExplosiveShot.buff_duration = 3
 ExplosiveShot.cooldown_duration = 30
@@ -1095,26 +1117,19 @@ ExplosiveShot.explosion = Ability:Add(212680, false, true)
 ExplosiveShot.explosion:AutoAoe()
 local HighExplosiveTrap = Ability:Add(236776, false, true, 236777)
 HighExplosiveTrap.cooldown_duration = 40
-local HydrasBite = Ability:Add(260241, false, true)
+local ImplosiveTrap = Ability:Add(462031, false, true, 236777)
+HighExplosiveTrap.cooldown_duration = 60
 local Intimidation = Ability:Add(19577, false, true, 24394)
 Intimidation.cooldown_duration = 60
 Intimidation.buff_duration = 5
 Intimidation.requires_pet = true
-local KillerInstinct = Ability:Add(273887, false, true)
 local KillShot = Ability:Add({320976, 53351}, false, true)
 KillShot.cooldown_duration = 10
 KillShot.focus_cost = 10
 KillShot:SetVelocity(80)
-local LatentPoison = Ability:Add(378015, false, true)
-LatentPoison.buff_duration = 15
-local MasterMarksman = Ability:Add(260309, false, true, 269576)
-MasterMarksman.buff_duration = 6
-MasterMarksman.tick_interval = 2
-MasterMarksman.talent_node = 79913
 local Misdirection = Ability:Add(34477, true, true)
 Misdirection.buff_duration = 30
 Misdirection.cooldown_duration = 30
-local PoisonInjection = Ability:Add(378014, false, true)
 local ScareBeast = Ability:Add(1513)
 ScareBeast.buff_duration = 20
 ScareBeast.focus_cost = 25
@@ -1122,19 +1137,6 @@ local ScatterShot = Ability:Add(213691, false, true)
 ScatterShot.buff_duration = 4
 ScatterShot.cooldown_duration = 30
 ScatterShot:SetVelocity(60)
-local SerpentSting = Ability:Add(271788, false, true)
-SerpentSting.focus_cost = 10
-SerpentSting.buff_duration = 18
-SerpentSting.tick_interval = 3
-SerpentSting.hasted_ticks = true
-SerpentSting:SetVelocity(45)
-SerpentSting:AutoAoe(false, 'apply')
-SerpentSting:TrackAuras()
-local SteelTrap = Ability:Add(162488, false, true, 162487)
-SteelTrap.cooldown_duration = 30
-SteelTrap.buff_duration = 20
-SteelTrap.tick_interval = 2
-SteelTrap.hasted_ticks = true
 local SurvivalOfTheFittest = Ability:Add(264735, true, true)
 SurvivalOfTheFittest.buff_duration = 6
 SurvivalOfTheFittest.cooldown_duration = 180
@@ -1146,23 +1148,14 @@ TarTrap.ignore_immune = true
 local TranquilizingShot = Ability:Add(19801, false, true)
 TranquilizingShot.cooldown_duration = 10
 TranquilizingShot:SetVelocity(50)
-local Stampede = Ability:Add(201430, true, true)
-Stampede.buff_duration = 12
-Stampede.cooldown_duration = 120
 ------ Procs
 
 ---- Beast Mastery
+------ Baseline
 
 ------ Talents
-local AMurderOfCrows = Ability:Add(131894, false, true, 131900)
-AMurderOfCrows.cooldown_duration = 60
+local AMurderOfCrows = Ability:Add(459760, true, true, 459759)
 AMurderOfCrows.buff_duration = 15
-AMurderOfCrows.focus_cost = 30
-AMurderOfCrows.tick_interval = 1
-AMurderOfCrows.hasted_ticks = true
-local AspectOfTheWild = Ability:Add(193530, true, true)
-AspectOfTheWild.cooldown_duration = 120
-AspectOfTheWild.buff_duration = 20
 local BarbedShot = Ability:Add(217200, false, true)
 BarbedShot.cooldown_duration = 12
 BarbedShot.buff_duration = 8
@@ -1195,14 +1188,15 @@ KillCommandBM.hasted_cooldown = true
 KillCommandBM.requires_pet = true
 KillCommandBM.max_range = 50
 local KillerCobra = Ability:Add(199532, true, true)
+local KillerInstinct = Ability:Add(273887, false, true)
 local MultiShotBM = Ability:Add(2643, false, true)
 MultiShotBM.focus_cost = 40
 MultiShotBM:SetVelocity(50)
 MultiShotBM:AutoAoe(true)
-local OneWithThePack = Ability:Add(199528, true, true)
 local PetFrenzy = Ability:Add(272790, true, true)
 PetFrenzy.aura_target = 'pet'
-PetFrenzy.buff_duration = 8
+PetFrenzy.buff_duration = 12
+PetFrenzy.max_stack = 3
 local ScentOfBlood = Ability:Add(193532, true, true)
 local Stomp = Ability:Add(199530, false, true, 201754)
 Stomp:AutoAoe()
@@ -1211,69 +1205,67 @@ WildCall.buff_duration = 4
 ------ Procs
 
 ---- Marksmanship
+------ Baseline
 
 ------ Talents
-
+local HydrasBite = Ability:Add(260241, false, true)
+local MasterMarksman = Ability:Add(260309, false, true, 269576)
+MasterMarksman.buff_duration = 6
+MasterMarksman.tick_interval = 2
 ------ Procs
 
 ---- Survival
-
------- Talents
+------ Baseline
 local AspectOfTheEagle = Ability:Add(186289, true, true)
 AspectOfTheEagle.buff_duration = 15
 AspectOfTheEagle.cooldown_duration = 90
-local BirdsOfPrey = Ability:Add(260331, false, true)
+------ Talents
 local Bloodseeker = Ability:Add(260248, false, true, 259277)
 Bloodseeker.buff_duration = 8
 Bloodseeker.tick_interval = 2
 Bloodseeker.hasted_ticks = true
-Bloodseeker:TrackAuras()
+Bloodseeker.no_pandemic = true
+Bloodseeker:Track()
 Bloodseeker.buff = Ability:Add(260249, true, true)
-local Bombardier = Ability:Add(389880, false, true)
+local Bombardier = Ability:Add(389880, true, true, 459859)
+Bombardier.buff_duration = 60
+Bombardier.max_stack = 1
 local Butchery = Ability:Add(212436, false, true)
 Butchery.focus_cost = 30
-Butchery.cooldown_duration = 9
+Butchery.cooldown_duration = 15
 Butchery.hasted_cooldown = true
 Butchery.requires_charge = true
 Butchery:AutoAoe(true)
-local Carve = Ability:Add(187708, false, true)
-Carve.cooldown_duration = 6
-Carve.focus_cost = 35
-Carve.max_range = 5
-Carve.hasted_cooldown = true
-Carve:AutoAoe(true)
+local ContagiousReagents = Ability:Add(459741, false, true)
 local CoordinatedAssault = Ability:Add(360952, true, true)
 CoordinatedAssault.cooldown_duration = 120
 CoordinatedAssault.buff_duration = 20
 CoordinatedAssault.requires_pet = true
 CoordinatedAssault.empower = Ability:Add(361738, true, true)
 CoordinatedAssault.empower.buff_duration = 3
-local CoordinatedKill = Ability:Add(385739, false, true)
-CoordinatedKill.talent_node = 79824
-local DeadlyDuo = Ability:Add(378962, true, true, 397568)
-DeadlyDuo.buff_duration = 12
-DeadlyDuo.talent_node = 79869
-local FlankersAdvantage = Ability:Add(263186, false, true)
+local DeadlyDuo = Ability:Add(378962, true, true)
+local FlankersAdvantage = Ability:Add(459964, false, true)
 local FlankingStrike = Ability:Add(269751, false, true, 269752)
 FlankingStrike.cooldown_duration = 30
 FlankingStrike.requires_pet = true
-FlankingStrike.max_range = 5
-FlankingStrike.focus_gain = 30
+FlankingStrike.max_range = 10
+FlankingStrike.focus_cost = 15
 local FuryOfTheEagle = Ability:Add(203415, true, true, 203413)
-FuryOfTheEagle.buff_duration = 4
+FuryOfTheEagle.buff_duration = 3
 FuryOfTheEagle.cooldown_duration = 45
+FuryOfTheEagle.tick_interval = 0.5
+FuryOfTheEagle.hasted_duration = true
+FuryOfTheEagle.hasted_ticks = true
 FuryOfTheEagle:AutoAoe()
+local GrenadeJuggler = Ability:Add(459843, true, true, 470488)
+GrenadeJuggler.buff_duration = 8
+GrenadeJuggler.max_stack = 1
 local GuerrillaTactics = Ability:Add(264332, false, true)
 local Harpoon = Ability:Add(190925, false, true, 190927)
 Harpoon.cooldown_duration = 30
 Harpoon.buff_duration = 3
 Harpoon.triggers_gcd = false
 Harpoon.max_range = 30
-local IntenseFocus = Ability:Add(385709, true, true)
-local InternalBleeding = Ability:Add(270343, false, true) -- Shrapnel Bomb DoT applied by Raptor Strike/Mongoose Bite/Carve
-InternalBleeding.buff_duration = 9
-InternalBleeding.tick_interval = 3
-InternalBleeding.hasted_ticks = true
 local KillCommand = Ability:Add(259489, false, true)
 KillCommand.cooldown_duration = 6
 KillCommand.focus_gain = 15
@@ -1282,6 +1274,10 @@ KillCommand.requires_charge = true
 KillCommand.requires_pet = true
 KillCommand.max_range = 50
 KillCommand:AutoAoe(false, 'cast')
+local MercilessBlow = Ability:Add(459868, false, true, 459870)
+MercilessBlow.buff_duration = 8
+MercilessBlow.tick_interval = 1
+MercilessBlow.hasted_ticks = true
 local MongooseBite = Ability:Add(259387, false, true)
 MongooseBite.focus_cost = 30
 MongooseBite.max_range = 5
@@ -1291,65 +1287,88 @@ local Muzzle = Ability:Add(187707, false, true) -- Replaces Counter-Shot
 Muzzle.cooldown_duration = 15
 Muzzle.max_range = 5
 Muzzle.triggers_gcd = false
-local PheromoneBomb = Ability:Add(270323, false, true, 270332) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
-PheromoneBomb.cooldown_duration = 18
-PheromoneBomb.buff_duration = 6
-PheromoneBomb.tick_interval = 1
-PheromoneBomb.hasted_cooldown = true
-PheromoneBomb.requires_charge = true
-PheromoneBomb:SetVelocity(30)
-PheromoneBomb:AutoAoe(false, 'apply')
+local OutlandVenom = Ability:Add(459939, false, true, 459941)
+OutlandVenom.max_stack = 8
 local Ranger = Ability:Add(385695, false, true)
-Ranger.talent_node = 79825
 local RaptorStrike = Ability:Add(186270, false, true)
 RaptorStrike.focus_cost = 30
 RaptorStrike.max_range = 5
-local RuthlessMarauder = Ability:Add(385718, true, true)
-RuthlessMarauder.talent_node = 79829
-local ShrapnelBomb = Ability:Add(270335, false, true, 270339) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
-ShrapnelBomb.cooldown_duration = 18
-ShrapnelBomb.buff_duration = 6
-ShrapnelBomb.tick_interval = 1
-ShrapnelBomb.hasted_cooldown = true
-ShrapnelBomb.requires_charge = true
-ShrapnelBomb:SetVelocity(30)
-ShrapnelBomb:AutoAoe(false, 'apply')
-local Spearhead = Ability:Add(360966, true, true)
-Spearhead.buff_duration = 12
+local RelentlessPrimalFerocity = Ability:Add(459922, true, true)
+local RuthlessMarauder = Ability:Add(470068, true, true, 470070)
+RuthlessMarauder.buff_duration = 10
+local SicEm = Ability:Add(459920, true, true, 461409)
+SicEm.max_stack = 1
+local Spearhead = Ability:Add(360966, false, true, 378957)
+Spearhead.buff_duration = 10
 Spearhead.cooldown_duration = 90
-Spearhead.bleed = Ability:Add(389881, false, true)
-Spearhead.bleed.buff_duration = 4
-Spearhead.bleed.tick_interval = 2
+Spearhead.tick_interval = 1
+Spearhead.hasted_ticks = true
+local SymbioticAdrenaline = Ability:Add(459875, false, true)
 local TermsOfEngagement = Ability:Add(265895, true, true, 265898)
 TermsOfEngagement.buff_duration = 10
 local TipOfTheSpear = Ability:Add(260285, true, true, 260286)
 TipOfTheSpear.buff_duration = 10
+TipOfTheSpear.max_stack = 3
 local VipersVenom = Ability:Add(268501, false, true)
-VipersVenom.talent_node = 79826
-local VolatileBomb = Ability:Add(271045, false, true, 271049) -- Provided by Wildfire Infusion, replaces Wildfire Bomb
-VolatileBomb.cooldown_duration = 18
-VolatileBomb.buff_duration = 6
-VolatileBomb.tick_interval = 1
-VolatileBomb.hasted_cooldown = true
-VolatileBomb.requires_charge = true
-VolatileBomb:SetVelocity(35)
-VolatileBomb:AutoAoe(false, 'apply')
-local WildfireBomb = Ability:Add(259495, false, true, 269747)
+local WildfireBomb = Ability:Add(259495, false, true, 265157)
 WildfireBomb.cooldown_duration = 18
-WildfireBomb.buff_duration = 6
-WildfireBomb.tick_interval = 1
+WildfireBomb.focus_cost = 10
 WildfireBomb.hasted_cooldown = true
 WildfireBomb.requires_charge = true
-WildfireBomb:SetVelocity(30)
-WildfireBomb:AutoAoe(false, 'apply')
-local WildfireInfusion = Ability:Add(271014, false, true)
+WildfireBomb:SetVelocity(35)
+WildfireBomb:AutoAoe()
+WildfireBomb.dot = Ability:Add(269747, false, true)
+WildfireBomb.dot.buff_duration = 6
+WildfireBomb.dot.tick_interval = 1
+WildfireBomb.dot.no_pandemic = true
+local WildfireInfusion = Ability:Add(460198, false, true)
 ------ Procs
 
--- Tier bonuses
-local ExposedWound = Ability:Add(410147, true, true) -- Survival T30 2pc
-ExposedWound.buff_duration = 12
-local ShreddedArmor = Ability:Add(410167, false, true) -- Survival T30 4pc
-ShreddedArmor.buff_duration = 8
+-- Hero talents
+---- Dark Ranger
+
+---- Pack Leader
+local BeastOfOpportunity = Ability:Add(445700, true, true, 450143)
+BeastOfOpportunity.buff_duration = 6
+local CoveringFire = Ability:Add(445715, false, true)
+local CullTheHerd = Ability:Add(445717, false, true, 449233)
+CullTheHerd.buff_duration = 6
+CullTheHerd.tick_interval = 2
+local FrenziedTear = Ability:Add(445696, true, true, 447262)
+FrenziedTear.buff_duration = 20
+local FuriousAssault = Ability:Add(445699, true, true, 448814)
+FuriousAssault.buff_duration = 12
+FuriousAssault.max_stack = 1
+local HowlOfThePack = Ability:Add(445707, true, true, 462515)
+local PackAssault = Ability:Add(445721, false, true)
+local PackCoordination = Ability:Add(445505, true, true, 445695)
+PackCoordination.buff_duration = 20
+local ScatteredPrey = Ability:Add(445768, true, true, 461866)
+ScatteredPrey.buff_duration = 20
+local ViciousHunt = Ability:Add(445404, true, true, 431917)
+ViciousHunt.buff_duration = 20
+ViciousHunt.max_stack = 1
+local WildAttacks = Ability:Add(445708, true, true)
+---- Sentinel
+local LunarStorm = Ability:Add(450385, true, true, 450978)
+LunarStorm.buff_duration = 8
+LunarStorm.cooldown_duration = 15
+LunarStorm:Track()
+LunarStorm.damage = Ability:Add(450883, false, true)
+LunarStorm.damage.tick_interval = 0.4
+LunarStorm.damage:AutoAoe()
+LunarStorm.debuff = Ability:Add(450884, false, true)
+LunarStorm.debuff.buff_duration = 8
+LunarStorm.debuff.no_pandemic = true
+LunarStorm.debuff:Track()
+local Sentinel = Ability:Add(450369, false, true, 450387)
+Sentinel.buff_duration = 1200
+Sentinel.max_stack = 10
+Sentinel.no_pandemic = true
+Sentinel.damage = Ability:Add(450412, false, true)
+local SymphonicArsenal = Ability:Add(450383, false, true, 451194)
+-- Tier set bonuses
+
 -- PvP talents
 
 -- Racials
@@ -1364,6 +1383,10 @@ Pet.Bite.focus_cost = 25
 Pet.Claw = Ability:Add(16827, false, 'pet')
 Pet.Claw.cooldown_duration = 3
 Pet.Claw.focus_cost = 25
+Pet.FlankingStrike = Ability:Add(259516, false, 'pet')
+Pet.FlankingStrike.focus_gain = 30
+Pet.Growl = Ability:Add(2649, false, 'pet')
+Pet.Growl.cooldown_duration = 8
 Pet.Smack = Ability:Add(49966, false, 'pet')
 Pet.Smack.cooldown_duration = 3
 Pet.Smack.focus_cost = 25
@@ -1422,7 +1445,7 @@ end
 
 function SummonedPet:Remains(initial)
 	if self.summon_spell and self.summon_spell.summon_count > 0 and self.summon_spell:Casting() then
-		return self.duration
+		return self:Duration()
 	end
 	local expires_max = 0
 	for guid, unit in next, self.active_units do
@@ -1454,6 +1477,10 @@ function SummonedPet:Count()
 	return count
 end
 
+function SummonedPet:Duration()
+	return self.duration
+end
+
 function SummonedPet:Expiring(seconds)
 	local count = 0
 	for guid, unit in next, self.active_units do
@@ -1468,14 +1495,16 @@ function SummonedPet:AddUnit(guid)
 	local unit = {
 		guid = guid,
 		spawn = Player.time,
-		expires = Player.time + self.duration,
+		expires = Player.time + self:Duration(),
 	}
 	self.active_units[guid] = unit
+	--log(format('%.3f SUMMONED PET ADDED %s EXPIRES %.3f', unit.spawn, guid, unit.expires))
 	return unit
 end
 
 function SummonedPet:RemoveUnit(guid)
 	if self.active_units[guid] then
+		--log(format('%.3f SUMMONED PET REMOVED %s AFTER %.3fs EXPECTED %.3fs', Player.time, guid, Player.time - self.active_units[guid], self.active_units[guid].expires))
 		self.active_units[guid] = nil
 	end
 end
@@ -1495,7 +1524,7 @@ function SummonedPet:Clear()
 end
 
 -- Summoned Pets
-
+Pet.SentinelOwl = SummonedPet:Add(233188, LunarStorm.cooldown_duration, LunarStorm)
 -- End Summoned Pets
 
 -- Start Inventory Items
@@ -1570,9 +1599,6 @@ Healthstone.max_charges = 3
 -- Equipment
 local Trinket1 = InventoryItem:Add(0)
 local Trinket2 = InventoryItem:Add(0)
---Trinket.DragonfireBombDispenser = InventoryItem:Add(202610)
---Trinket.ElementiumPocketAnvil = InventoryItem:Add(202617)
-local DjaruunPillarOfTheElderFlame = InventoryItem:Add(202569)
 -- End Inventory Items
 
 -- Start Abilities Functions
@@ -1581,7 +1607,7 @@ function Abilities:Update()
 	wipe(self.bySpellId)
 	wipe(self.velocity)
 	wipe(self.autoAoe)
-	wipe(self.trackAuras)
+	wipe(self.tracked)
 	for _, ability in next, self.all do
 		if ability.known then
 			self.bySpellId[ability.spellId] = ability
@@ -1595,7 +1621,7 @@ function Abilities:Update()
 				self.autoAoe[#self.autoAoe + 1] = ability
 			end
 			if ability.aura_targets then
-				self.trackAuras[#self.trackAuras + 1] = ability
+				self.tracked[#self.tracked + 1] = ability
 			end
 		end
 	end
@@ -1725,51 +1751,46 @@ function Player:UpdateKnown()
 	local info, node
 	local configId = C_ClassTalents.GetActiveConfigID()
 	for _, ability in next, Abilities.all do
-		ability.known = false
-		ability.rank = 0
-		for _, spellId in next, ability.spellIds do
-			info = GetSpellInfo(spellId)
-			if info then
-				ability.spellId, ability.name, ability.icon = info.spellID, info.name, info.originalIconID
+		if not ability.pet_spell then
+			ability.known = false
+			ability.rank = 0
+			for _, spellId in next, ability.spellIds do
+				info = GetSpellInfo(spellId)
+				if info then
+					ability.spellId, ability.name, ability.icon = info.spellID, info.name, info.originalIconID
+				end
+				if IsPlayerSpell(spellId) or (ability.learn_spellId and IsPlayerSpell(ability.learn_spellId)) then
+					ability.known = true
+					break
+				end
 			end
-			if IsPlayerSpell(spellId) or (ability.learn_spellId and IsPlayerSpell(ability.learn_spellId)) then
-				ability.known = true
-				break
+			if ability.bonus_id then -- used for checking enchants and crafted effects
+				ability.known = self:BonusIdEquipped(ability.bonus_id)
 			end
-		end
-		if ability.bonus_id then -- used for checking enchants and crafted effects
-			ability.known = self:BonusIdEquipped(ability.bonus_id)
-		end
-		if ability.talent_node and configId then
-			node = C_Traits.GetNodeInfo(configId, ability.talent_node)
-			if node then
-				ability.rank = node.activeRank
-				ability.known = ability.rank > 0
+			if ability.talent_node and configId then
+				node = C_Traits.GetNodeInfo(configId, ability.talent_node)
+				if node then
+					ability.rank = node.activeRank
+					ability.known = ability.rank > 0
+				end
 			end
-		end
-		if C_LevelLink.IsSpellLocked(ability.spellId) or (ability.check_usable and not IsSpellUsable(ability.spellId)) then
-			ability.known = false -- spell is locked, do not mark as known
+			if C_LevelLink.IsSpellLocked(ability.spellId) or (ability.check_usable and not IsSpellUsable(ability.spellId)) then
+				ability.known = false -- spell is locked, do not mark as known
+			end
 		end
 	end
 
+	SerpentSting.known = true
 	Bloodseeker.buff.known = Bloodseeker.known
 	ExplosiveShot.explosion.known = ExplosiveShot.known
-	LatentPoison.known = PoisonInjection.known
 	if MongooseBite.known then
 		MongooseFury.known = true
 		RaptorStrike.known = false
 	end
-	if WildfireInfusion.known then
-		ShrapnelBomb.known = true
-		PheromoneBomb.known = true
-		VolatileBomb.known = true
-		InternalBleeding.known = true
-	end
-	if Player.spec == SPEC.SURVIVAL then
-		ExposedWound.known = Player.set_bonus.t30 >= 2
-		ShreddedArmor.known = Player.set_bonus.t30 >= 4
-	end
-	SeethingRage.known = DjaruunPillarOfTheElderFlame:Equipped()
+	LunarStorm.damage.known = LunarStorm.known
+	LunarStorm.debuff.known = LunarStorm.known
+	WildfireBomb.dot.known = WildfireBomb.known
+	Sentinel.damage.known = Sentinel.known
 
 	Abilities:Update()
 	SummonedPets:Update()
@@ -1840,7 +1861,7 @@ function Player:UpdateThreat()
 end
 
 function Player:Update()
-	local _, cooldown, start, ends, spellId, speed, max_speed
+	local _, cooldown, start, ends, spellId, speed, max_speed, speed_mh, speed_oh
 	self.main = nil
 	self.cd = nil
 	self.interrupt = nil
@@ -1871,25 +1892,25 @@ function Player:Update()
 	end
 	self.focus.regen = GetPowerRegenForPowerType(2)
 	self.focus.current = UnitPower('player', 2) + (self.focus.regen * self.execute_remains)
-	if self.cast.ability then
+	if self.cast.ability and self.cast.ability.focus_cost then
 		self.focus.current = self.focus.current - self.cast.ability:Cost()
 	end
 	self.focus.current = clamp(self.focus.current, 0, self.focus.max)
 	self.focus.deficit = self.focus.max - self.focus.current
+	speed, max_speed = GetUnitSpeed('player')
+	self.moving = speed ~= 0
+	self.movement_speed = max_speed / 7 * 100
 	speed_mh, speed_oh = UnitAttackSpeed('player')
 	self.swing.mh.speed = speed_mh or 0
 	self.swing.oh.speed = speed_oh or 0
 	self.swing.mh.remains = max(0, self.swing.mh.last + self.swing.mh.speed - self.time)
 	self.swing.oh.remains = max(0, self.swing.oh.last + self.swing.oh.speed - self.time)
-	speed, max_speed = GetUnitSpeed('player')
-	self.moving = speed ~= 0
-	self.movement_speed = max_speed / 7 * 100
 	self:UpdateThreat()
 
 	Pet:Update()
 
 	SummonedPets:Purge()
-	trackAuras:Purge()
+	TrackedAuras:Purge()
 	if Opt.auto_aoe then
 		for _, ability in next, Abilities.autoAoe do
 			ability:UpdateTargetsHit()
@@ -1898,7 +1919,7 @@ function Player:Update()
 	end
 
 	self.major_cd_remains = (
-		(AspectOfTheWild.known and AspectOfTheWild:Remains()) or
+		(BestialWrath.known and BestialWrath:Remains()) or
 		(CoordinatedAssault.known and CoordinatedAssault:Remains())
 	) or 0
 
@@ -1953,6 +1974,7 @@ function Pet:UpdateKnown()
 		(self.Claw.known and self.Claw) or
 		(self.Smack.known and self.Smack)
 	)
+	self.FlankingStrike.known = FlankingStrike.known
 
 	Abilities:Update()
 end
@@ -1986,7 +2008,7 @@ function Target:UpdateHealth(reset)
 		table.remove(self.health.history, 1)
 		self.health.history[25] = self.health.current
 	end
-	self.timeToDieMax = self.health.current / Player.health.max * (Player.spec == SPEC.SHADOW and 10 or 20)
+	self.timeToDieMax = self.health.current / Player.health.max * 15
 	self.health.pct = self.health.max > 0 and (self.health.current / self.health.max * 100) or 100
 	self.health.loss_per_sec = (self.health.history[1] - self.health.current) / 5
 	self.timeToDie = (
@@ -2076,28 +2098,6 @@ function Harpoon:CastLanded(dstGUID, event)
 	Target.estimated_range = 5
 end
 
-function SerpentSting:CastLanded(dstGUID, event)
-	Ability.CastLanded(self, dstGUID, event)
-	if event == 'SPELL_AURA_APPLIED' and self.aura_targets[dstGUID] then
-		self:RefreshAura(dstGUID)
-	end
-end
-
-function SerpentSting:Remains()
-	if VolatileBomb.known and VolatileBomb:Traveling() > 0 then
-		return self:Duration()
-	end
-	return Ability.Remains(self)
-end
-
-function KillCommand:Gain()
-	local gain = Ability.Gain(self)
-	if IntenseFocus.known then
-		gain = gain + 6
-	end
-	return gain
-end
-
 function KillShot:Usable(...)
 	if not Ability.Usable(self, ...) then
 		return false
@@ -2105,50 +2105,19 @@ function KillShot:Usable(...)
 	if Target.health.pct < 20 then
 		return true
 	end
-	if CoordinatedKill.known and CoordinatedAssault:Up() then
-		return true
-	end
-	if HuntersPrey.known and HuntersPrey:Up() then
+	if Deathblow.known and Deathblow:Up() then
 		return true
 	end
 	return false
 end
 
-function WildfireBomb:Gain()
-	local gain = Ability.Gain(self)
-	if CoordinatedKill.known and CoordinatedAssault:Up() then
-		gain = gain + (5 * CoordinatedKill.rank)
+function RaptorStrike:Cost()
+	if FuriousAssault.known and FuriousAssault:Up() then
+		return 0
 	end
-	return gain
+	return Ability.Cost(self)
 end
-ShrapnelBomb.Gain = WildfireBomb.Gain
-PheromoneBomb.Gain = WildfireBomb.Gain
-VolatileBomb.Gain = WildfireBomb.Gain
-
--- hack to support Wildfire Bomb's changing spells on each cast
-function WildfireInfusion:Update()
-	local info = GetSpellInfo(WildfireBomb.name)
-	if self.current then
-		if self.current:Match(info.spellID) then
-			return -- not a bomb change
-		end
-		self.current.next = false
-	end
-	if ShrapnelBomb:Match(info.spellID) then
-		self.current = ShrapnelBomb
-	elseif PheromoneBomb:Match(info.spellID) then
-		self.current = PheromoneBomb
-	elseif VolatileBomb:Match(info.spellID) then
-		self.current = VolatileBomb
-	else
-		self.current = WildfireBomb
-	end
-	self.current.next = true
-	WildfireBomb.icon = self.current.icon
-	if Player.main == WildfireBomb then
-		Player.main = false -- reset current ability if it was a bomb
-	end
-end
+MongooseBite.Cost = RaptorStrike.Cost
 
 function CallPet1:Usable(...)
 	if Pet.active then
@@ -2185,6 +2154,27 @@ function PetFrenzy:StartDurationStack()
 		end
 	end
 	return 0, 0, 0
+end
+
+function CoordinatedAssault:CooldownDuration()
+	local duration = Ability.CooldownDuration(self)
+	if SymbioticAdrenaline.known then
+		duration = duration - 60
+	end
+	return max(0, duration)
+end
+
+function LunarStorm:Remains()
+	local aura = self.aura_targets[Player.guid]
+	return aura and max(0, aura.expires - Player.time - Player.execute_remains) or 0
+end
+
+function LunarStorm:Cooldown()
+	local remains = Pet.SentinelOwl:Remains()
+	if remains == 0 and (Player.time - WildfireBomb.last_used) < 2 then
+		return self:CooldownDuration()
+	end
+	return remains
 end
 
 -- End Ability Modifications
@@ -2247,14 +2237,9 @@ APL[SPEC.SURVIVAL].Main = function(self)
 	end
 	if Player:TimeInCombat() == 0 then
 --[[
-actions.precombat=flask
-actions.precombat+=/augmentation
-actions.precombat+=/food
-actions.precombat+=/variable,name=mb_rs_cost,op=setif,value=action.mongoose_bite.cost,value_else=action.raptor_strike.cost,condition=talent.mongoose_bite
-actions.precombat+=/summon_pet
+actions.precombat=summon_pet
+actions.precombat+=/use_item,name=imperfect_ascendancy_serum
 actions.precombat+=/snapshot_stats
-actions.precombat+=/use_item,name=algethar_puzzle_box
-actions.precombat+=/steel_trap,precast_time=2
 ]]
 		if Harpoon:Usable() then
 			UseCooldown(Harpoon)
@@ -2263,36 +2248,48 @@ actions.precombat+=/steel_trap,precast_time=2
 --[[
 actions=auto_attack
 actions+=/call_action_list,name=cds
-actions+=/call_action_list,name=st,if=active_enemies<3
-actions+=/call_action_list,name=cleave,if=active_enemies>2
+actions+=/call_action_list,name=plst,if=active_enemies<3&talent.vicious_hunt
+actions+=/call_action_list,name=plcleave,if=active_enemies>2&talent.vicious_hunt
+actions+=/call_action_list,name=sentst,if=active_enemies<3&!talent.vicious_hunt
+actions+=/call_action_list,name=sentcleave,if=active_enemies>2&!talent.vicious_hunt
 actions+=/arcane_torrent
+actions+=/bag_of_tricks
+actions+=/lights_judgment
 ]]
 	self.use_cds = Target.boss or Target.player or Target.timeToDie > (Opt.cd_ttd - min(6, Player.enemies - 1)) or (CoordinatedAssault.known and CoordinatedAssault:Up()) or (Spearhead.known and Spearhead:Up())
-	self.mb_rs_cost = MongooseBite.known and MongooseBite:Cost() or RaptorStrike:Cost()
-	self.delay_bomb = Player.enemies < 7 and CoordinatedAssault.known and KillShot.known and Pet.basic_attack and (BirdsOfPrey.known or Player.enemies < 4) and CoordinatedAssault:Up() and KillShot:Usable(Player.gcd, true) and (CoordinatedAssault.empower:Up() or Pet.basic_attack:Usable(0.2, true)) and CoordinatedAssault:Remains() > max(KillShot:Cooldown(), Pet.basic_attack:Cooldown())
 	if self.use_cds then
 		self:cds()
 	end
-	if Player.enemies > 2 then
-		return self:cleave()
+	local apl
+	if ViciousHunt.known then
+		if Player.enemies < 3 then
+			apl = self:plst()
+		else
+			apl = self:plcleave()
+		end
+	else
+		if Player.enemies < 3 then
+			apl = self:sentst()
+		else
+			apl = self:sentcleave()
+		end
 	end
-	return self:st()
+	return apl
 end
 
 APL[SPEC.SURVIVAL].cds = function(self)
 --[[
-actions.cds=blood_fury,if=buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault
-actions.cds+=/harpoon,if=talent.terms_of_engagement.enabled&focus<focus.max
-actions.cds+=/ancestral_call,if=buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault
-actions.cds+=/fireblood,if=buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault
-actions.cds+=/lights_judgment
-actions.cds+=/bag_of_tricks,if=cooldown.kill_command.full_recharge_time>gcd
-actions.cds+=/berserking,if=buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault|time_to_die<13
+actions.cds=blood_fury,if=buff.coordinated_assault.up|!talent.coordinated_assault&cooldown.spearhead.remains|!talent.spearhead&!talent.coordinated_assault
+actions.cds+=/invoke_external_buff,name=power_infusion,if=buff.coordinated_assault.up|!talent.coordinated_assault&cooldown.spearhead.remains|!talent.spearhead&!talent.coordinated_assault
+actions.cds+=/harpoon,if=prev.kill_command
+actions.cds+=/ancestral_call,if=buff.coordinated_assault.up|!talent.coordinated_assault&cooldown.spearhead.remains|!talent.spearhead&!talent.coordinated_assault
+actions.cds+=/fireblood,if=buff.coordinated_assault.up|!talent.coordinated_assault&cooldown.spearhead.remains|!talent.spearhead&!talent.coordinated_assault
+actions.cds+=/berserking,if=buff.coordinated_assault.up|!talent.coordinated_assault&cooldown.spearhead.remains|!talent.spearhead&!talent.coordinated_assault|time_to_die<13
 actions.cds+=/muzzle
-actions.cds+=/potion,if=target.time_to_die<25|buff.coordinated_assault.up|buff.spearhead.up|!talent.spearhead&!talent.coordinated_assault
-actions.cds+=/use_item,name=algethar_puzzle_box,use_off_gcd=1,if=gcd.remains>gcd.max-0.1
-actions.cds+=/use_item,name=manic_grieftorch,use_off_gcd=1,if=gcd.remains>gcd.max-0.1&!buff.spearhead.up
-actions.cds+=/use_items,use_off_gcd=1,if=gcd.remains>gcd.max-0.1&!buff.spearhead.up
+actions.cds+=/potion,if=target.time_to_die<25|buff.coordinated_assault.up|!talent.coordinated_assault&cooldown.spearhead.remains|!talent.spearhead&!talent.coordinated_assault
+actions.cds+=/use_item,name=imperfect_ascendancy_serum,use_off_gcd=1,if=gcd.remains>gcd.max-0.1
+actions.cds+=/use_item,name=mad_queens_mandate,if=(time_to_die<10|time_to_die>120)&(trinket.skardyns_grace.cooldown.remains|!equipped.skardyns_grace)|time_to_die<10
+actions.cds+=/use_items,if=cooldown.coordinated_assault.remains|cooldown.spearhead.remains
 actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
 ]]
 	if Opt.trinket then
@@ -2304,293 +2301,91 @@ actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
 	end
 end
 
-APL[SPEC.SURVIVAL].cleave = function(self)
+APL[SPEC.SURVIVAL].plst = function(self)
 --[[
-actions.cleave=kill_shot,if=buff.coordinated_assault_empower.up&talent.birds_of_prey
-actions.cleave+=/wildfire_bomb,if=full_recharge_time<gcd|!cooldown.coordinated_assault.remains|buff.coordinated_assault.remains&(!buff.coordinated_assault_empower.up)|talent.bombardier
-actions.cleave+=/death_chakram
-actions.cleave+=/stampede
-actions.cleave+=/coordinated_assault,if=cooldown.fury_of_the_eagle.remains|!talent.fury_of_the_eagle
-actions.cleave+=/explosive_shot
-actions.cleave+=/carve,if=cooldown.wildfire_bomb.full_recharge_time>spell_targets%2
-actions.cleave+=/butchery,if=full_recharge_time<gcd|dot.shrapnel_bomb.ticking&(dot.internal_bleeding.stack<2|dot.shrapnel_bomb.remains<gcd)
-actions.cleave+=/wildfire_bomb,if=!dot.wildfire_bomb.ticking
-actions.cleave+=/use_item,name=djaruun_pillar_of_the_elder_flame
-actions.cleave+=/fury_of_the_eagle
-actions.cleave+=/carve,if=dot.shrapnel_bomb.ticking
-actions.cleave+=/flanking_strike,if=focus+cast_regen<focus.max
-actions.cleave+=/butchery,if=(!next_wi_bomb.shrapnel|!talent.wildfire_infusion)
-actions.cleave+=/mongoose_bite,target_if=max:debuff.latent_poison.stack,if=debuff.latent_poison.stack>8
-actions.cleave+=/raptor_strike,target_if=max:debuff.latent_poison.stack,if=debuff.latent_poison.stack>8
-actions.cleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&full_recharge_time<gcd
-actions.cleave+=/carve
-actions.cleave+=/kill_shot,if=!buff.coordinated_assault.up
-actions.cleave+=/steel_trap,if=focus+cast_regen<focus.max
-actions.cleave+=/spearhead
-actions.cleave+=/mongoose_bite,target_if=min:dot.serpent_sting.remains,if=buff.spearhead.remains
-actions.cleave+=/serpent_sting,target_if=min:remains,if=refreshable&target.time_to_die>12&(!talent.vipers_venom|talent.hydras_bite)
-actions.cleave+=/mongoose_bite,target_if=min:dot.serpent_sting.remains
-actions.cleave+=/raptor_strike,target_if=min:dot.serpent_sting.remains
-actions.cleave+=/flanking_strike
+actions.plst=raptor_bite,target_if=max:dot.serpent_sting.remains,if=buff.howl_of_the_pack.up&pet.main.buff.pack_coordination.up&buff.howl_of_the_pack.remains<gcd
+actions.plst+=/kill_command,target_if=min:bloodseeker.remains,if=(buff.relentless_primal_ferocity.up&buff.tip_of_the_spear.stack<1)
+actions.plst+=/butchery,if=buff.scattered_prey.up&buff.scattered_prey.remains<gcd
+actions.plst+=/spearhead,if=cooldown.coordinated_assault.remains
+actions.plst+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!dot.serpent_sting.ticking&target.time_to_die>12&(!talent.contagious_reagents|active_dot.serpent_sting=0)
+actions.plst+=/raptor_bite,target_if=max:dot.serpent_sting.remains,if=talent.contagious_reagents&active_dot.serpent_sting<active_enemies&dot.serpent_sting.remains
+actions.plst+=/butchery
+actions.plst+=/flanking_strike,if=buff.tip_of_the_spear.stack=2|buff.tip_of_the_spear.stack=1
+actions.plst+=/kill_shot,if=buff.tip_of_the_spear.stack>0
+actions.plst+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0&cooldown.wildfire_bomb.charges_fractional>1.4|cooldown.wildfire_bomb.charges_fractional>1.9|cooldown.coordinated_assault.remains<2*gcd&talent.bombardier
+actions.plst+=/explosive_shot
+actions.plst+=/coordinated_assault,if=!talent.bombardier|talent.bombardier&cooldown.wildfire_bomb.charges_fractional<1
+actions.plst+=/fury_of_the_eagle,if=buff.tip_of_the_spear.stack>0&(!raid_event.adds.exists|raid_event.adds.exists&raid_event.adds.in>40)
+actions.plst+=/raptor_bite,if=buff.furious_assault.up
+actions.plst+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&(!buff.relentless_primal_ferocity.up|(buff.relentless_primal_ferocity.up&buff.tip_of_the_spear.stack<1|focus<30))
+actions.plst+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0&(!raid_event.adds.exists|raid_event.adds.exists&raid_event.adds.in>15)
+actions.plst+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!talent.contagious_reagents
+actions.plst+=/raptor_bite,target_if=max:dot.serpent_sting.remains
 ]]
-	if BirdsOfPrey.known and KillShot:Usable() and CoordinatedAssault.empower:Up() then
-		return KillShot
-	end
-	if WildfireBomb:Usable() and not self.delay_bomb and (
-		(WildfireBomb:FullRechargeTime() < Player.gcd) or
-		(CoordinatedAssault.known and (CoordinatedAssault:Ready() or (CoordinatedAssault:Up() and CoordinatedAssault.empower:Down())))
-	) then
-		return WildfireBomb
-	end
-	if self.use_cds then
-		if DeathChakram:Usable() then
-			UseCooldown(DeathChakram)
-		elseif Stampede:Usable() then
-			UseCooldown(Stampede)
-		elseif CoordinatedAssault:Usable() and (not FuryOfTheEagle.known or not FuryOfTheEagle:Ready()) then
-			UseCooldown(CoordinatedAssault)
-		elseif ExplosiveShot:Usable() then
-			UseCooldown(ExplosiveShot)
-		end
-	end
-	if Carve:Usable() and WildfireBomb:FullRechargeTime() > (Player.enemies / 2) then
-		return Carve
-	end
-	if Butchery:Usable() and (
-		(Butchery:FullRechargeTime() < Player.gcd) or
-		(ShrapnelBomb.known and ShrapnelBomb:Ticking() > 0 and (InternalBleeding:Stack() < 2 or ShrapnelBomb:Remains() < Player.gcd))
-	) then
-		return Butchery
-	end
-	if WildfireBomb:Usable() and not self.delay_bomb and (
-		(not WildfireInfusion.known and WildfireBomb:Down()) or
-		(WildfireInfusion.known and (not WildfireInfusion.current or WildfireInfusion.current:Down()))
-	) then
-		return WildfireBomb
-	end
-	if self.use_cds then
-		if DjaruunPillarOfTheElderFlame:Usable() then
-			UseCooldown(DjaruunPillarOfTheElderFlame)
-		elseif FuryOfTheEagle:Usable() then
-			UseCooldown(FuryOfTheEagle)
-		end
-	end
-	if ShrapnelBomb.known and Carve:Usable() and ShrapnelBomb:Ticking() > 0 then
-		return Carve
-	end
-	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
-		return FlankingStrike
-	end
-	if Butchery:Usable() and (not ShrapnelBomb.known or not ShrapnelBomb.next) then
-		return Butchery
-	end
-	if PoisonInjection.known and MongooseBite:Usable() and LatentPoison:Stack() > 8 then
-		return MongooseBite
-	end
-	if PoisonInjection.known and RaptorStrike:Usable() and LatentPoison:Stack() > 8 then
-		return RaptorStrike
-	end
-	if KillCommand:Usable() and KillCommand:WontCapFocus() and KillCommand:FullRechargeTime() < Player.gcd then
-		return KillCommand
-	end
-	if Carve:Usable() then
-		return Carve
-	end
-	if KillShot:Usable() and (not CoordinatedAssault.known or CoordinatedAssault:Down()) then
-		return KillShot
-	end
-	if self.use_cds and SteelTrap:Usable() and SteelTrap:WontCapFocus() then
-		UseCooldown(SteelTrap)
-	end
-	if Spearhead.known then
-		if self.use_cds and Spearhead:Usable() then
-			UseCooldown(Spearhead)
-		end
-		if MongooseBite:Usable() and Spearhead:Up() then
-			return MongooseBite
-		end
-	end
-	if SerpentSting:Usable() and SerpentSting:Refreshable() and Target.timeToDie > (SerpentSting:Remains() + (SerpentSting:TickTime() * 4)) and (not VipersVenom.known or HydrasBite.known) then
-		return SerpentSting
-	end
-	if MongooseBite:Usable() then
-		return MongooseBite
-	end
-	if RaptorStrike:Usable() then
-		return RaptorStrike
-	end
-	if FlankingStrike:Usable() then
-		return FlankingStrike
-	end
+
 end
 
-APL[SPEC.SURVIVAL].st = function(self)
+APL[SPEC.SURVIVAL].plcleave = function(self)
 --[[
-actions.st=kill_command,target_if=min:bloodseeker.remains,if=talent.spearhead&debuff.shredded_armor.stack<1&cooldown.spearhead.remains<2*gcd
-actions.st+=/wildfire_bomb,if=talent.spearhead&cooldown.spearhead.remains<2*gcd&debuff.shredded_armor.stack>0
-actions.st+=/death_chakram,if=focus+cast_regen<focus.max|talent.spearhead&!cooldown.spearhead.remains
-actions.st+=/use_item,name=djaruun_pillar_of_the_elder_flame,if=!talent.fury_of_the_eagle|talent.spearhead
-actions.st+=/spearhead,if=focus+action.kill_command.cast_regen>focus.max-10&(cooldown.death_chakram.remains|!talent.death_chakram)
-actions.st+=/kill_shot,if=buff.coordinated_assault_empower.up
-actions.st+=/wildfire_bomb,if=(raid_event.adds.in>cooldown.wildfire_bomb.full_recharge_time-(cooldown.wildfire_bomb.full_recharge_time%3.5)&debuff.shredded_armor.stack>0&(full_recharge_time<2*gcd|talent.bombardier&!cooldown.coordinated_assault.remains|talent.bombardier&buff.coordinated_assault.up&buff.coordinated_assault.remains<2*gcd)|!raid_event.adds.exists&time_to_die<7)&set_bonus.tier30_4pc
-actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=full_recharge_time<gcd&focus+cast_regen<focus.max&(buff.deadly_duo.stack>2|buff.spearhead.remains&dot.pheromone_bomb.remains)
-actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=cooldown.wildfire_bomb.full_recharge_time<3*gcd&debuff.shredded_armor.stack<1&set_bonus.tier30_4pc&!buff.spearhead.remains
-actions.st+=/mongoose_bite,if=buff.spearhead.remains
-actions.st+=/mongoose_bite,if=active_enemies=1&target.time_to_die<focus%(variable.mb_rs_cost-cast_regen)*gcd|buff.mongoose_fury.up&buff.mongoose_fury.remains<gcd
-actions.st+=/kill_shot,if=!buff.coordinated_assault.up
-actions.st+=/raptor_strike,if=active_enemies=1&target.time_to_die<focus%(variable.mb_rs_cost-cast_regen)*gcd
-actions.st+=/serpent_sting,target_if=min:remains,if=!dot.serpent_sting.ticking&target.time_to_die>7&!talent.vipers_venom
-actions.st+=/fury_of_the_eagle,if=buff.seething_rage.up&buff.seething_rage.remains<3*gcd&(!raid_event.adds.exists|active_enemies>1)|raid_event.adds.exists&raid_event.adds.in>40&buff.seething_rage.up&buff.seething_rage.remains<3*gcd
-actions.st+=/use_item,name=djaruun_pillar_of_the_elder_flame,if=talent.coordinated_assault|talent.fury_of_the_eagle&cooldown.fury_of_the_eagle.remains<5
-actions.st+=/mongoose_bite,if=talent.alpha_predator&buff.mongoose_fury.up&buff.mongoose_fury.remains<focus%(variable.mb_rs_cost-cast_regen)*gcd|buff.seething_rage.remains&active_enemies=1
-actions.st+=/flanking_strike,if=focus+cast_regen<focus.max
-actions.st+=/stampede
-actions.st+=/coordinated_assault,if=(!talent.coordinated_kill&target.health.pct<20&(!buff.spearhead.remains&cooldown.spearhead.remains|!talent.spearhead)|talent.coordinated_kill&(!buff.spearhead.remains&cooldown.spearhead.remains|!talent.spearhead))&(!raid_event.adds.exists|raid_event.adds.in>90)
-actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=full_recharge_time<gcd&focus+cast_regen<focus.max&(cooldown.flanking_strike.remains|!talent.flanking_strike)
-actions.st+=/wildfire_bomb,if=dot.serpent_sting.refreshable&next_wi_bomb.volatile
-actions.st+=/serpent_sting,target_if=min:remains,if=refreshable&!talent.vipers_venom
-actions.st+=/wildfire_bomb,if=raid_event.adds.in>cooldown.wildfire_bomb.full_recharge_time-(cooldown.wildfire_bomb.full_recharge_time%3.5)&full_recharge_time<2*gcd
-actions.st+=/mongoose_bite,if=dot.shrapnel_bomb.ticking
-actions.st+=/wildfire_bomb,if=raid_event.adds.in>cooldown.wildfire_bomb.full_recharge_time-(cooldown.wildfire_bomb.full_recharge_time%3.5)&set_bonus.tier30_4pc&(!dot.wildfire_bomb.ticking&debuff.shredded_armor.stack>0&focus+cast_regen<focus.max|active_enemies>1)
-actions.st+=/mongoose_bite,target_if=max:debuff.latent_poison.stack,if=buff.mongoose_fury.up
-actions.st+=/explosive_shot,if=talent.ranger&(!raid_event.adds.exists|raid_event.adds.in>28)
-actions.st+=/fury_of_the_eagle,if=cooldown.elder_flame_408821.remains>40&target.health.pct<65&talent.ruthless_marauder&(!raid_event.adds.exists|raid_event.adds.exists&raid_event.adds.in>40)
-actions.st+=/mongoose_bite,target_if=max:debuff.latent_poison.stack,if=focus+action.kill_command.cast_regen>focus.max-10|set_bonus.tier30_4pc
-actions.st+=/raptor_strike,target_if=max:debuff.latent_poison.stack
-actions.st+=/steel_trap
-actions.st+=/wildfire_bomb,if=raid_event.adds.in>cooldown.wildfire_bomb.full_recharge_time-(cooldown.wildfire_bomb.full_recharge_time%3.5)&!dot.wildfire_bomb.ticking
-actions.st+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
-actions.st+=/coordinated_assault,if=!talent.coordinated_kill&time_to_die>140
+actions.plcleave=spearhead,if=cooldown.coordinated_assault.remains
+actions.plcleave+=/kill_command,target_if=min:bloodseeker.remains,if=buff.relentless_primal_ferocity.up&buff.tip_of_the_spear.stack<1
+actions.plcleave+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0&cooldown.wildfire_bomb.charges_fractional>1.7|cooldown.wildfire_bomb.charges_fractional>1.9|cooldown.coordinated_assault.remains<2*gcd|talent.butchery&cooldown.butchery.remains<gcd
+actions.plcleave+=/flanking_strike,if=buff.tip_of_the_spear.stack=2|buff.tip_of_the_spear.stack=1
+actions.plcleave+=/butchery
+actions.plcleave+=/explosive_shot
+actions.plcleave+=/coordinated_assault,if=!talent.bombardier|talent.bombardier&cooldown.wildfire_bomb.charges_fractional<1
+actions.plcleave+=/fury_of_the_eagle,if=buff.tip_of_the_spear.stack>0
+actions.plcleave+=/kill_shot,if=buff.deathblow.remains
+actions.plcleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
+actions.plcleave+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0
+actions.plcleave+=/kill_shot
+actions.plcleave+=/kill_command,target_if=min:bloodseeker.remains
+actions.plcleave+=/raptor_bite
 ]]
-	if self.use_cds then
-		if Spearhead.known and ShreddedArmor.known and Spearhead:Ready(2 * Player.gcd) then
-			if KillCommand:Usable() and ShreddedArmor:Stack() < 1 then
-				return KillCommand
-			end
-			if WildfireBomb:Usable() and ShreddedArmor:Up() then
-				return WildfireBomb
-			end
-		end
-		if DeathChakram:Usable() and (DeathChakram:WontCapFocus() or (Spearhead.known and Spearhead:Ready())) then
-			UseCooldown(DeathChakram)
-		elseif DjaruunPillarOfTheElderFlame:Usable() and (not FuryOfTheEagle.known or Spearhead.known) then
-			UseCooldown(DjaruunPillarOfTheElderFlame)
-		elseif Spearhead:Usable() and KillCommand:WillCapFocus(10) and (not DeathChakram.known or not DeathChakram:Ready()) then
-			UseCooldown(Spearhead)
-		end
-	end
-	if CoordinatedAssault.known and KillShot:Usable() and CoordinatedAssault.empower:Up() then
-		return KillShot
-	end
-	if ShreddedArmor.known and WildfireBomb:Usable() and not self.delay_bomb and ShreddedArmor:Up() and (
-		(Target.boss and Target.timeToDie < 7) or
-		(WildfireBomb:FullRechargeTime() < (2 * Player.gcd)) or
-		(Bombardier.known and (CoordinatedAssault:Ready() or (CoordinatedAssault:Up() and CoordinatedAssault:Remains() < (2 * Player.gcd))))
-	) then
-		return WildfireBomb
-	end
-	if KillCommand:Usable() and (
-		(KillCommand:FullRechargeTime() < Player.gcd and KillCommand:WontCapFocus() and ((DeadlyDuo.known and DeadlyDuo:Stack() > 2) or (Spearhead.known and Spearhead:Up() and PheromoneBomb:Up()))) or
-		(ShreddedArmor.known and WildfireBomb:FullRechargeTime() < (3 * Player.gcd) and ShreddedArmor:Down() and (not Spearhead.known or Spearhead:Down()))
-	) then
-		return KillCommand
-	end
-	if MongooseBite:Usable() and (
-		(Spearhead.known and Spearhead:Up()) or
-		between(MongooseFury:Remains(), 0.2, Player.gcd + 0.2) or
-		(Player.enemies <= 1 and Target.timeToDie < (Player.focus.current / (self.mb_rs_cost - MongooseBite:CastRegen()) * Player.gcd))
-	) then
-		return MongooseBite
-	end
-	if KillShot:Usable() and (not CoordinatedAssault.known or CoordinatedAssault:Down()) then
-		return KillShot
-	end
-	if RaptorStrike:Usable() and (
-		(Player.enemies <= 1 and Target.timeToDie < (Player.focus.current / (self.mb_rs_cost - RaptorStrike:CastRegen()) * Player.gcd))
-	) then
-		return MongooseBite
-	end
-	if not VipersVenom.known and SerpentSting:Usable() and SerpentSting:Down() and Target.timeToDie > (SerpentSting:TickTime() * 3) then
-		return SerpentSting
-	end
-	if SeethingRage.known and FuryOfTheEagle:Usable() and between(SeethingRage:Remains(), 0.2, 3 * Player.gcd) then
-		UseCooldown(FuryOfTheEagle)
-	end
-	if DjaruunPillarOfTheElderFlame:Usable() and (CoordinatedAssault.known or (FuryOfTheEagle.known and FuryOfTheEagle:Ready(5))) then
-		UseCooldown(DjaruunPillarOfTheElderFlame)
-	end
-	if MongooseBite:Usable() and (
-		(AlphaPredator.known and between(MongooseFury:Remains(), 0.2, Player.focus.current / (self.mb_rs_cost - MongooseBite:CastRegen()) * Player.gcd)) or
-		(SeethingRage.known and Player.enemies <= 1 and SeethingRage:Up())
-	) then
-		return MongooseBite
-	end
-	if FlankingStrike:Usable() and FlankingStrike:WontCapFocus() then
-		return FlankingStrike
-	end
-	if Stampede:Usable() then
-		UseCooldown(Stampede)
-	end
-	if CoordinatedAssault:Usable() and (not Spearhead.known or (Spearhead:Down() and not Spearhead:Ready())) and (CoordinatedKill.known or Target.health.pct < 20) then
-		UseCooldown(CoordinatedAssault)
-	end
-	if KillCommand:Usable() and KillCommand:FullRechargeTime() < Player.gcd and KillCommand:WontCapFocus() and (not FlankingStrike.known or not FlankingStrike:Ready()) then
-		return KillCommand
-	end
-	if VolatileBomb.known and WildfireBomb:Usable() and not self.delay_bomb and SerpentSting:Refreshable() and VolatileBomb.next then
-		return WildfireBomb
-	end
-	if not VipersVenom.known and SerpentSting:Usable() and SerpentSting:Refreshable() then
-		return SerpentSting
-	end
-	if WildfireBomb:Usable() and not self.delay_bomb and WildfireBomb:FullRechargeTime() < (2 * Player.gcd) then
-		return WildfireBomb
-	end
-	if ShrapnelBomb.known and MongooseBite:Usable() and ShrapnelBomb:Up() then
-		return MongooseBite
-	end
-	if ShreddedArmor.known and WildfireBomb:Usable() and not self.delay_bomb and (
-		Player.enemies > 1 or
-		(ShreddedArmor:Up() and WildfireBomb:WontCapFocus() and (
-			(not WildfireInfusion.known and WildfireBomb:Down()) or
-			(WildfireInfusion.known and (not WildfireInfusion.current or WildfireInfusion.current:Down()))
-		))
-	) then
-		return WildfireBomb
-	end
-	if MongooseBite:Usable() and MongooseFury:Remains() > 0.2 then
-		return MongooseBite
-	end
-	if Ranger.known and ExplosiveShot:Usable() and (Player.enemies > 1 or Target.timeToDie > ExplosiveShot:Duration()) then
-		UseCooldown(ExplosiveShot)
-	end
-	if RuthlessMarauder.known and FuryOfTheEagle:Usable() and (not DjaruunPillarOfTheElderFlame:Equipped() or not DjaruunPillarOfTheElderFlame:Ready(40)) and Target.health.pct < (5 + (30 * RuthlessMarauder.rank)) then
-		UseCooldown(FuryOfTheEagle)
-	end
-	if MongooseBite:Usable() and (ShreddedArmor.known or KillCommand:WillCapFocus(10)) then
-		return MongooseBite
-	end
-	if RaptorStrike:Usable() then
-		return RaptorStrike
-	end
-	if self.use_cds and SteelTrap:Usable() then
-		UseCooldown(SteelTrap)
-	end
-	if WildfireBomb:Usable() and not self.delay_bomb and (
-		(not WildfireInfusion.known and WildfireBomb:Down()) or
-		(WildfireInfusion.known and (not WildfireInfusion.current or WildfireInfusion.current:Down()))
-	) then
-		return WildfireBomb
-	end
-	if KillCommand:Usable() and KillCommand:WontCapFocus() then
-		return KillCommand
-	end
-	if self.use_cds and not CoordinatedKill.known and CoordinatedAssault:Usable() and Target.timeToDie > 140 then
-		UseCooldown(CoordinatedAssault)
-	end
-	if not RuthlessMarauder.known and FuryOfTheEagle:Usable() and (not DjaruunPillarOfTheElderFlame:Equipped() or not DjaruunPillarOfTheElderFlame:Ready(40)) then
-		UseCooldown(FuryOfTheEagle)
-	end
+
+end
+
+APL[SPEC.SURVIVAL].sentst = function(self)
+--[[
+actions.sentst=wildfire_bomb,if=!cooldown.lunar_storm.remains
+actions.sentst+=/kill_command,target_if=min:bloodseeker.remains,if=(buff.relentless_primal_ferocity.up&buff.tip_of_the_spear.stack<1)
+actions.sentst+=/spearhead,if=cooldown.coordinated_assault.remains
+actions.sentst+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!dot.serpent_sting.ticking&target.time_to_die>12&(!talent.contagious_reagents|active_dot.serpent_sting=0)
+actions.sentst+=/raptor_bite,target_if=max:dot.serpent_sting.remains,if=talent.contagious_reagents&active_dot.serpent_sting<active_enemies&dot.serpent_sting.remains
+actions.sentst+=/flanking_strike,if=buff.tip_of_the_spear.stack=2|buff.tip_of_the_spear.stack=1
+actions.sentst+=/wildfire_bomb,if=(cooldown.lunar_storm.remains>full_recharge_time-gcd)&(buff.tip_of_the_spear.stack>0&cooldown.wildfire_bomb.charges_fractional>1.7|cooldown.wildfire_bomb.charges_fractional>1.9)|(talent.bombardier&cooldown.coordinated_assault.remains<2*gcd)
+actions.sentst+=/butchery
+actions.sentst+=/coordinated_assault,if=!talent.bombardier|talent.bombardier&cooldown.wildfire_bomb.charges_fractional<1
+actions.sentst+=/explosive_shot
+actions.sentst+=/fury_of_the_eagle,if=buff.tip_of_the_spear.stack>0
+actions.sentst+=/kill_shot
+actions.sentst+=/kill_command,target_if=min:bloodseeker.remains,if=buff.tip_of_the_spear.stack<1&cooldown.flanking_strike.remains<gcd
+actions.sentst+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max&(!buff.relentless_primal_ferocity.up|(buff.relentless_primal_ferocity.up&(buff.tip_of_the_spear.stack<2|focus<30)))
+actions.sentst+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0&cooldown.lunar_storm.remains>full_recharge_time&(!raid_event.adds.exists|raid_event.adds.exists&raid_event.adds.in>15)
+actions.sentst+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!talent.contagious_reagents
+actions.sentst+=/raptor_bite,target_if=max:dot.serpent_sting.remains
+]]
+
+end
+
+APL[SPEC.SURVIVAL].sentcleave = function(self)
+--[[
+actions.sentcleave=wildfire_bomb,if=!cooldown.lunar_storm.remains
+actions.sentcleave+=/kill_command,target_if=min:bloodseeker.remains,if=buff.relentless_primal_ferocity.up&buff.tip_of_the_spear.stack<1
+actions.sentcleave+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0&cooldown.wildfire_bomb.charges_fractional>1.7|cooldown.wildfire_bomb.charges_fractional>1.9|(talent.bombardier&cooldown.coordinated_assault.remains<2*gcd)|talent.butchery&cooldown.butchery.remains<gcd
+actions.sentcleave+=/butchery
+actions.sentcleave+=/explosive_shot
+actions.sentcleave+=/coordinated_assault,if=!talent.bombardier|talent.bombardier&cooldown.wildfire_bomb.charges_fractional<1
+actions.sentcleave+=/fury_of_the_eagle,if=buff.tip_of_the_spear.stack>0
+actions.sentcleave+=/flanking_strike,if=(buff.tip_of_the_spear.stack=2|buff.tip_of_the_spear.stack=1)
+actions.sentcleave+=/kill_shot,if=buff.deathblow.remains&talent.sic_em
+actions.sentcleave+=/kill_command,target_if=min:bloodseeker.remains,if=focus+cast_regen<focus.max
+actions.sentcleave+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0
+actions.sentcleave+=/kill_command,target_if=min:bloodseeker.remains
+actions.sentcleave+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!talent.contagious_reagents
+actions.sentcleave+=/raptor_bite,target_if=max:dot.serpent_sting.remains
+]]
+
 end
 
 APL.Interrupt = function(self)
@@ -2872,7 +2667,7 @@ end
 
 function UI:UpdateDisplay()
 	Timer.display = 0
-	local border, dim, dim_cd, text_cd, text_center, text_tl
+	local border, dim, dim_cd, text_cd, text_center, text_tr
 	local channel = Player.channel
 
 	if Opt.dimmer then
@@ -2894,10 +2689,12 @@ function UI:UpdateDisplay()
 			border = 'freecast'
 		end
 	end
-	if Player.cd and Player.cd.requires_react then
-		local react = Player.cd:React()
-		if react > 0 then
-			text_cd = format('%.1f', react)
+	if Player.cd then
+		if Player.cd.requires_react then
+			local react = Player.cd:React()
+			if react > 0 then
+				text_cd = format('%.1f', react)
+			end
 		end
 	end
 	if Player.pool_focus then
@@ -2931,17 +2728,17 @@ function UI:UpdateDisplay()
 			end
 		end
 	end
+	if Player.major_cd_remains > 0 then
+		text_tr = format('%.1fs', Player.major_cd_remains)
+	end
 	if border ~= ghPanel.border.overlay then
 		ghPanel.border.overlay = border
 		ghPanel.border:SetTexture(ADDON_PATH .. (border or 'border') .. '.blp')
 	end
-	if Player.major_cd_remains > 0 then
-		text_tl = format('%.1f', Player.major_cd_remains)
-	end
 
 	ghPanel.dimmer:SetShown(dim)
 	ghPanel.text.center:SetText(text_center)
-	ghPanel.text.tl:SetText(text_tl)
+	ghPanel.text.tr:SetText(text_tr)
 	--ghPanel.text.bl:SetText(format('%.1fs', Target.timeToDie))
 	ghCooldownPanel.text:SetText(text_cd)
 	ghCooldownPanel.dimmer:SetShown(dim_cd)
@@ -2954,7 +2751,7 @@ function UI:UpdateCombat()
 
 	if Player.main then
 		ghPanel.icon:SetTexture(Player.main.icon)
-		Player.main_freecast = (Player.main.focus_cost > 0 and Player.main:Cost() == 0)
+		Player.main_freecast = Player.main:Free()
 	end
 	if Player.cd then
 		ghCooldownPanel.icon:SetTexture(Player.cd.icon)
@@ -3075,7 +2872,7 @@ CombatEvent.UNIT_DIED = function(event, srcGUID, dstGUID)
 	if not uid or Target.Dummies[uid] then
 		return
 	end
-	trackAuras:Remove(dstGUID)
+	TrackedAuras:Remove(dstGUID)
 	if Opt.auto_aoe then
 		AutoAoe:Remove(dstGUID)
 	end
@@ -3143,8 +2940,16 @@ CombatEvent.SPELL_SUMMON = function(event, srcGUID, dstGUID)
 	end
 end
 
+--local UnknownSpell = {}
+
 CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellSchool, missType, overCap, powerType)
-	if not (srcGUID == Player.guid or srcGUID == Pet.guid) then
+	if srcGUID == Pet.guid then
+		if Pet.stuck and (event == 'SPELL_CAST_SUCCESS' or event == 'SPELL_DAMAGE' or event == 'SWING_DAMAGE') then
+			Pet.stuck = false
+		elseif not Pet.stuck and event == 'SPELL_CAST_FAILED' and missType == 'No path available' then
+			Pet.stuck = true
+		end
+	elseif srcGUID ~= Player.guid then
 		local uid = ToUID(srcGUID)
 		if uid then
 			local pet = SummonedPets.byUnitId[uid]
@@ -3160,24 +2965,24 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 					elseif (event == 'SPELL_DAMAGE' or event == 'SPELL_ABSORBED' or event == 'SPELL_MISSED' or event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH') and pet.CastLanded then
 						pet:CastLanded(unit, spellId, dstGUID, event, missType)
 					end
-					--log(format('PET %d EVENT %s SPELL %s ID %d', pet.unitId, event, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0))
+					--log(format('%.3f PET %d EVENT %s SPELL %s ID %d', Player.time, pet.unitId, event, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0))
 				end
 			end
 		end
 		return
 	end
 
-	if srcGUID == Pet.guid then
-		if Pet.stuck and (event == 'SPELL_CAST_SUCCESS' or event == 'SPELL_DAMAGE' or event == 'SWING_DAMAGE') then
-			Pet.stuck = false
-		elseif not Pet.stuck and event == 'SPELL_CAST_FAILED' and missType == 'No path available' then
-			Pet.stuck = true
-		end
-	end
-
 	local ability = spellId and Abilities.bySpellId[spellId]
 	if not ability then
-		--log(format('EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d', event, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0))
+--[[
+		if not UnknownSpell[event] then
+			UnknownSpell[event] = {}
+		end
+		if not UnknownSpell[event][spellId] then
+			UnknownSpell[event][spellId] = true
+			log(format('%.3f EVENT %s TRACK CHECK FOR UNKNOWN %s ID %d FROM %s ON %s', Player.time, event, type(spellName) == 'string' and spellName or 'Unknown', spellId or 0, srcGUID, dstGUID))
+		end
+]]
 		return
 	end
 
@@ -3200,7 +3005,7 @@ CombatEvent.SPELL = function(event, srcGUID, dstGUID, spellId, spellName, spellS
 			ability:RemoveAura(dstGUID)
 		end
 	end
-	if dstGUID == Player.guid then
+	if dstGUID == Player.guid or dstGUID == Pet.guid then
 		if event == 'SPELL_AURA_APPLIED' or event == 'SPELL_AURA_REFRESH' then
 			ability.last_gained = Player.time
 		end
@@ -3365,10 +3170,6 @@ function Events:PLAYER_EQUIPMENT_CHANGED()
 		end
 	end
 
-	Player.set_bonus.t29 = (Player:Equipped(200387) and 1 or 0) + (Player:Equipped(200389) and 1 or 0) + (Player:Equipped(200390) and 1 or 0) + (Player:Equipped(200391) and 1 or 0) + (Player:Equipped(200392) and 1 or 0)
-	Player.set_bonus.t30 = (Player:Equipped(202477) and 1 or 0) + (Player:Equipped(202478) and 1 or 0) + (Player:Equipped(202479) and 1 or 0) + (Player:Equipped(202480) and 1 or 0) + (Player:Equipped(202482) and 1 or 0)
-	Player.set_bonus.t31 = (Player:Equipped(207216) and 1 or 0) + (Player:Equipped(207217) and 1 or 0) + (Player:Equipped(207218) and 1 or 0) + (Player:Equipped(207219) and 1 or 0) + (Player:Equipped(207221) and 1 or 0)
-	Player.set_bonus.t32 = (Player:Equipped(217181) and 1 or 0) + (Player:Equipped(217182) and 1 or 0) + (Player:Equipped(217183) and 1 or 0) + (Player:Equipped(217184) and 1 or 0) + (Player:Equipped(217185) and 1 or 0)
 	Player.set_bonus.t33 = (Player:Equipped(212018) and 1 or 0) + (Player:Equipped(212019) and 1 or 0) + (Player:Equipped(212020) and 1 or 0) + (Player:Equipped(212021) and 1 or 0) + (Player:Equipped(212023) and 1 or 0)
 
 	Player:ResetSwing(true, true)
@@ -3384,7 +3185,6 @@ function Events:PLAYER_SPECIALIZATION_CHANGED(unitId)
 	Player:SetTargetMode(1)
 	Events:PLAYER_EQUIPMENT_CHANGED()
 	Events:PLAYER_REGEN_ENABLED()
-	Events:SPELL_UPDATE_ICON()
 	Events:UNIT_HEALTH('player')
 	Events:UNIT_MAXPOWER('player')
 	UI.OnResourceFrameShow()
@@ -3410,12 +3210,6 @@ function Events:SPELL_UPDATE_COOLDOWN()
 			cooldown = GetSpellCooldown(61304)
 		end
 		ghPanel.swipe:SetCooldown(cooldown.startTime, cooldown.duration)
-	end
-end
-
-function Events:SPELL_UPDATE_ICON()
-	if WildfireInfusion.known then
-		WildfireInfusion:Update()
 	end
 end
 
