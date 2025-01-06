@@ -2180,6 +2180,24 @@ function LunarStorm:Cooldown()
 	return remains
 end
 
+function TipOfTheSpear:Stack()
+	local stack = Ability.Stack(self)
+	if stack > 0 then
+		stack = stack - (
+			(WildfireBomb.known and WildfireBomb:Traveling() or 0) +
+			(KillShot.known and KillShot:Traveling() or 0)
+		)
+	end
+	return max(0, stack)
+end
+
+function TipOfTheSpear:Remains()
+	if self:Stack() == 0 then
+		return 0
+	end
+	return Ability.Remains(self)
+end
+
 -- End Ability Modifications
 
 local function UseCooldown(ability, overwrite)
