@@ -1061,6 +1061,9 @@ local FreezingTrap = Ability:Add(187650, false, true, 3355)
 FreezingTrap.cooldown_duration = 25
 FreezingTrap.buff_duration = 60
 local HuntersMark = Ability:Add(257284)
+HuntersMark.buff_duration = 3600
+HuntersMark.cooldown_duration = 20
+HuntersMark:Track()
 local MendPet = Ability:Add(136, true, true)
 MendPet.cooldown_duration = 10
 MendPet.buff_duration = 10
@@ -2262,7 +2265,7 @@ actions.precombat=summon_pet
 actions.precombat+=/use_item,name=imperfect_ascendancy_serum
 actions.precombat+=/snapshot_stats
 ]]
-		if HuntersMark:Usable() and HuntersMark:Down() and Target:TimeToPct(80) > 20 then
+		if HuntersMark:Usable() and HuntersMark:Ticking() < 1 and Target:TimeToPct(80) > 20 then
 			UseCooldown(HuntersMark)
 		elseif Harpoon:Usable() then
 			UseCooldown(Harpoon)
@@ -2315,7 +2318,7 @@ actions.cds+=/use_item,name=mad_queens_mandate,if=(time_to_die<10|time_to_die>12
 actions.cds+=/use_items,if=cooldown.coordinated_assault.remains|cooldown.spearhead.remains
 actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
 ]]
-	if HuntersMark:Usable() and HuntersMark:Down() and Target:TimeToPct(80) > 20 then
+	if HuntersMark:Usable() and HuntersMark:Ticking() < 1 and Target:TimeToPct(80) > 20 then
 		return UseCooldown(HuntersMark)
 	end
 	if Opt.trinket then
