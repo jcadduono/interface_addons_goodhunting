@@ -1348,8 +1348,10 @@ local FuriousAssault = Ability:Add(445699, true, true, 448814)
 FuriousAssault.buff_duration = 12
 FuriousAssault.max_stack = 1
 local HowlOfThePack = Ability:Add(445707, true, true, 462515)
+HowlOfThePack.buff_duration = 8
+HowlOfThePack.max_stack = 3
 local PackAssault = Ability:Add(445721, false, true)
-local PackCoordination = Ability:Add(445505, true, true, 445695)
+local PackCoordination = Ability:Add(445505, true, 'pet', 445695)
 PackCoordination.buff_duration = 20
 local ScatteredPrey = Ability:Add(445768, true, true, 461866)
 ScatteredPrey.buff_duration = 20
@@ -2278,7 +2280,7 @@ actions.precombat=summon_pet
 actions.precombat+=/use_item,name=imperfect_ascendancy_serum
 actions.precombat+=/snapshot_stats
 ]]
-		if HuntersMark:Usable() and HuntersMark:Ticking() < 1 and Target:TimeToPct(80) > 20 then
+		if HuntersMark:Usable() and HuntersMark:Down() and HuntersMark:Ticking() < 1 and Target:TimeToPct(80) > 20 then
 			UseCooldown(HuntersMark)
 		elseif Harpoon:Usable() then
 			UseCooldown(Harpoon)
@@ -2331,7 +2333,7 @@ actions.cds+=/use_item,name=mad_queens_mandate,if=(time_to_die<10|time_to_die>12
 actions.cds+=/use_items,if=cooldown.coordinated_assault.remains|cooldown.spearhead.remains
 actions.cds+=/aspect_of_the_eagle,if=target.distance>=6
 ]]
-	if HuntersMark:Usable() and HuntersMark:Ticking() < 1 and Target:TimeToPct(80) > 20 then
+	if HuntersMark:Usable() and HuntersMark:Down() and HuntersMark:Ticking() < 1 and Target:TimeToPct(80) > 20 then
 		return UseCooldown(HuntersMark)
 	end
 	if Opt.trinket then
@@ -2364,7 +2366,64 @@ actions.plst+=/wildfire_bomb,if=buff.tip_of_the_spear.stack>0&(!raid_event.adds.
 actions.plst+=/raptor_bite,target_if=min:dot.serpent_sting.remains,if=!talent.contagious_reagents
 actions.plst+=/raptor_bite,target_if=max:dot.serpent_sting.remains
 ]]
-
+	if HowlOfThePack.known and RaptorBite:Usable() and HowlOfThePack:Up() and PackCoordination:Up() and HowlOfThePack:Remains() < Player.gcd then
+		return RaptorBite
+	end
+	if RelentlessPrimalFerocity.known and KillCommand:Usable() and RelentlessPrimalFerocity:Up() and TipOfTheSpear:Down() then
+		return KillCommand
+	end
+	if ScatteredPrey.known and Butchery:Usable() and ScatteredPrey:Up() and ScatteredPrey:Remains() < Player.gcd then
+		return Butchery
+	end
+	if self.use_cds and Spearhead:Usable() and not CoordinatedAssault:Ready() then
+		UseCooldown(Spearhead)
+	end
+	if RaptorBite:Usable() and (
+		(SerpentSting:Down() and Target.timeToDie > 12 and (not ContagiousReagents.known or SerpentSting:Ticking() == 0)) or
+		(ContagiousReagents.known and SerpentSting:Up() and SerpentSting:Ticking() < Player.enemies)
+	) then
+		return RaptorBite
+	end
+	if Butchery:Usable() then
+		return Butchery
+	end
+	if self.use_cds and FlankingStrike:Usable() and (not TipOfTheSpear.known or between(TipOfTheSpear:Stack(), 1, 2)) then
+		UseCooldown(FlankingStrike)
+	end
+	if KillShot:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
+		return KillShot
+	end
+	if WildfireBomb:Usable() and (
+		WildfireBomb:ChargesFractional() > 1.9 or
+		(TipOfTheSpear.known and TipOfTheSpear:Up() and WildfireBomb:ChargesFractional() > 1.4) or
+		(self.use_cds and Bombardier.known and CoordinatedAssault:Ready(Player.gcd * 2))
+	) then
+		return WildfireBomb
+	end
+	if ExplosiveShot:Usable() and (Player.enemies > 1 or Target.timeToDie > ExplosiveShot:Duration()) then
+		return ExplosiveShot
+	end
+	if self.use_cds and CoordinatedAssault:Usable() and (not Bombardier.known or WildfireBomb:ChargesFractional() < 1) then
+		UseCooldown(CoordinatedAssault)
+	end
+	if self.use_cds and FuryOfTheEagle:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
+		UseCooldown(FuryOfTheEagle)
+	end
+	if FuriousAssault.known and RaptorBite:Usable() and FuriousAssault:Up() then
+		return RaptorBite
+	end
+	if KillCommand:Usable() and (
+		(FlankingStrike.known and TipOfTheSpear:Down() and FlankingStrike:Ready(Player.gcd)) or
+		(KillCommand:WontCapFocus() and (not RelentlessPrimalFerocity.known or RelentlessPrimalFerocity:Down() or (TipOfTheSpear.known and TipOfTheSpear:Stack() < 2) or Player.focus.current < 30))
+	) then
+		return KillCommand
+	end
+	if WildfireBomb:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
+		return WildfireBomb
+	end
+	if RaptorBite:Usable() then
+		return RaptorBite
+	end
 end
 
 APL[SPEC.SURVIVAL].plcleave = function(self)
@@ -2384,7 +2443,62 @@ actions.plcleave+=/kill_shot
 actions.plcleave+=/kill_command,target_if=min:bloodseeker.remains
 actions.plcleave+=/raptor_bite
 ]]
-
+	if self.use_cds and Spearhead:Usable() and not CoordinatedAssault:Ready() then
+		UseCooldown(Spearhead)
+	end
+	if RelentlessPrimalFerocity.known and KillCommand:Usable() and RelentlessPrimalFerocity:Up() and TipOfTheSpear:Down() then
+		return KillCommand
+	end
+	if WildfireBomb:Usable() and (
+		WildfireBomb:ChargesFractional() > 1.9 or
+		(TipOfTheSpear.known and TipOfTheSpear:Up() and WildfireBomb:ChargesFractional() > 1.7) or
+		(self.use_cds and Bombardier.known and CoordinatedAssault:Ready(Player.gcd * 2)) or
+		(Butchery.known and Butchery:Ready(Player.gcd))
+	) then
+		return WildfireBomb
+	end
+	if self.use_cds and FlankingStrike:Usable() and (not TipOfTheSpear.known or between(TipOfTheSpear:Stack(), 1, 2)) then
+		UseCooldown(FlankingStrike)
+	end
+	if Butchery:Usable() then
+		return Butchery
+	end
+	if ExplosiveShot:Usable() and (Player.enemies > 1 or Target.timeToDie > ExplosiveShot:Duration()) then
+		return ExplosiveShot
+	end
+	if self.use_cds then
+		if CoordinatedAssault:Usable() and (not Bombardier.known or WildfireBomb:ChargesFractional() < 1) then
+			UseCooldown(CoordinatedAssault)
+		end
+		if FuryOfTheEagle:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
+			UseCooldown(FuryOfTheEagle)
+		end
+	end
+	if SicEm.known and KillShot:Usable() and Deathblow:Up() then
+		return KillShot
+	end
+	if TipOfTheSpear.known and KillCommand:Usable() and KillCommand:WontCapFocus() and TipOfTheSpear:Stack() < TipOfTheSpear:MaxStack() then
+		return KillCommand
+	end
+	if WildfireBomb:Usable() and (not TipOfTheSpear.known or TipOfTheSpear:Up()) then
+		return WildfireBomb
+	end
+	if KillShot:Usable() and Player.enemies < 5 then
+		return KillShot
+	end
+	if RaptorBite:Usable() and (
+		(not ContagiousReagents.known and (
+			Player.focus.current > 60 or
+			(Player.focus.current > 40 and (not TipOfTheSpear.known or TipOfTheSpear:Stack() == 0)) or
+			(TipOfTheSpear.known and TipOfTheSpear:Stack() >= TipOfTheSpear:MaxStack())
+		)) or
+		(ContagiousReagents.known and (SerpentSting:Up() or SerpentSting:Ticking() == 0))
+	) then
+		return RaptorBite
+	end
+	if KillCommand:Usable() then
+		return KillCommand
+	end
 end
 
 APL[SPEC.SURVIVAL].sentst = function(self)
@@ -2916,7 +3030,7 @@ end
 
 function UI:UpdateDisplay()
 	Timer.display = 0
-	local border, dim, dim_cd, text_cd, text_center, text_tl, text_tr
+	local border, dim, dim_cd, text_center, text_tr, text_bl, text_cd_center, text_cd_tr
 	local channel = Player.channel
 
 	if Opt.dimmer then
@@ -2984,7 +3098,7 @@ function UI:UpdateDisplay()
 		end
 	end
 	if Player.major_cd_remains > 0 then
-		text_tr = format('%.1fs', Player.major_cd_remains)
+		text_bl = format('%.1fs', Player.major_cd_remains)
 	end
 	if border ~= ghPanel.border.overlay then
 		ghPanel.border.overlay = border
@@ -2993,11 +3107,10 @@ function UI:UpdateDisplay()
 
 	ghPanel.dimmer:SetShown(dim)
 	ghPanel.text.center:SetText(text_center)
-	ghPanel.text.tl:SetText(text_tl)
 	ghPanel.text.tr:SetText(text_tr)
-	--ghPanel.text.bl:SetText(format('%.1fs', Target.timeToDie))
-	ghCooldownPanel.text:SetText(text_cd)
-	ghCooldownPanel.dimmer:SetShown(dim_cd)
+	ghPanel.text.bl:SetText(text_bl)
+	ghCooldownPanel.text.center:SetText(text_cd_center)
+	ghCooldownPanel.text.tr:SetText(text_cd_tr)
 end
 
 function UI:UpdateCombat()
