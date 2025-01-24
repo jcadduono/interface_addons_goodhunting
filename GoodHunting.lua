@@ -544,7 +544,7 @@ function Ability:Usable(seconds, pool)
 	if not self.known then
 		return false
 	end
-	if (self.requires_pet or self.pet_spell) and not Pet.active then
+	if self.requires_pet and not Pet.active then
 		return false
 	end
 	if not pool and self:Cost() > (self.pet_spell and Pet.focus.current or Player.focus.current) then
@@ -898,7 +898,7 @@ function Ability:Targets()
 end
 
 function Ability:CastFailed(dstGUID, missType)
-	if (self.requires_pet or self.pet_spell) and missType == 'No path available' then
+	if self.requires_pet and missType == 'No path available' then
 		Pet.stuck = true
 	end
 end
@@ -908,11 +908,11 @@ function Ability:CastSuccess(dstGUID)
 	if self.ignore_cast then
 		return
 	end
-	if self.requires_pet or self.pet_spell then
+	if self.requires_pet then
 		Pet.stuck = false
-		if self.pet_spell then
-			return
-		end
+	end
+	if self.pet_spell then
+		return
 	end
 	Player.last_ability = self
 	if self.triggers_gcd then
